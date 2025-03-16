@@ -1,65 +1,87 @@
 local M = {}
 
 M.config = {
-	title = " Scratch ",
 	relative = "editor",
+	border = "rounded",
 	width = 1,
 	height = 1,
 	row = 1,
 	col = 1,
 	style = "minimal",
-	border = "rounded",
 }
 
-local win_property = {
-	width = 0.8,
-	height = 0.8,
+local prop = {
+	title = " Scratch ",
+	width = 0.6,
+	height = 0.6,
+
+	winnr = nil,
+	bufnr = nil,
 }
 
-local function is_buffer_modified()
-	local buf = vim.api.nvim_get_current_buf()
-	return vim.api.nvim_get_option_value("modified", { buf = buf })
+local function make_window_config()
+	local config = M.config
+
+	if prop.width <= 1.0 then
+		config.width = math.floor(prop.width * vim.o.columns)
+	else
+		config.width = math.floor(prop.width)
+	end
+
+	config.col = math.floor((vim.o.columns - config.width) / 2)
+
+	if prop.height <= 1.0 then
+		config.height = math.floor(prop.height * vim.o.lines)
+	else
+		config.height = math.floor(prop.height)
+	end
+
+	config.row = math.floor((vim.o.lines - config.height) / 2)
+
+	return config
 end
 
-local floating_win = nil
-
 M.toggle = function()
-	if floating_win == nil or not vim.api.nvim_win_is_valid(floating_win) then
-		M.config.width = math.floor(win_property.width * vim.o.columns)
-		M.config.height = math.floor(win_property.height * vim.o.lines)
-		M.config.col = math.floor((vim.o.columns - M.config.width) / 2)
-		M.config.row = math.floor((vim.o.lines - M.config.height) / 2)
+	if prop.winnr == nil or not vim.api.nvim_win_is_valid(prop.winnr) then
+		local config = make_window_config()
+		prop.winnr = vim.api.nvim_open_win(prop.bufnr, true, config)
 
-		-- Create a new floating window if it does not exist
-		local buf = vim.api.nvim_create_buf(false, true) -- create a new empty buffer
-		floating_win = vim.api.nvim_open_win(buf, true, M.config)
+		-- vim.notify("Create Win: " .. prop.winnr .. ", buf: " .. prop.bufnr)
 	else
-		-- If the window exists, check its visibility and hide/show it
-		local win_config = vim.api.nvim_win_get_config(floating_win)
-		if win_config.relative ~= "" then
-			local modified = is_buffer_modified()
-			if modified then
-				-- store buffer content
-				local _ = ""
-			end
+		if prop.winnr == vim.api.nvim_get_current_win() then
+			-- If current window is visible, hide it
+			vim.api.nvim_win_hide(prop.winnr)
 
-			-- If the window is visible, hide it
-			vim.api.nvim_win_set_config(floating_win, { relative = "" })
+			-- vim.notify("Hide Win: " .. prop.winnr .. ", buf: " .. prop.bufnr)
 		else
 			-- If the window is hidden, show it
-			vim.api.nvim_win_set_config(floating_win, M.config)
+			local config = make_window_config()
+			vim.api.nvim_win_set_config(prop.winnr, config)
+
+			-- Set focus on the floating window
+			vim.api.nvim_set_current_win(prop.winnr)
+
+			-- vim.notify("Show Win: " .. prop.winnr .. ", buf: " .. prop.bufnr)
 		end
 	end
 end
 
 function M.setup(opts)
 	opts = opts or {}
-	M.config.title = opts.title or M.config.title
-	win_property.width = opts.width or 0.8
-	win_property.height = opts.height or 0.8
+	M.config.title = opts.title or prop.title
+	M.config.border = opts.border or M.config.border
+	prop.width = opts.width or prop.width
+	prop.height = opts.height or prop.height
+
+	-- create a new empty buffer
+	prop.bufnr = vim.api.nvim_create_buf(false, false)
+
+	vim.bo[prop.bufnr].buftype = "nofile"
 
 	-- Merge the provided options with the default configuration
 	-- opts = vim.tbl_deep_extend("force", M.config, opts)
+
+	vim.api.nvim_buf_set_keymap(prop.bufnr, "n", "q", "<cmd>close<CR>", { noremap = true, silent = true })
 
 	-- Bind commands to our lua functions
 	vim.api.nvim_create_user_command("ScratchToggle", M.toggle, {})
