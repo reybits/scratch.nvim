@@ -1,5 +1,7 @@
 # Neovim Scratch Buffer
 
+> WARNING: This plugin is still in development and may not be stable!
+
 This plugin provides an easy way to work with scratch buffers in Neovim. It
 allows you to quickly open a scratch buffer in your current window or in a new
 split window. The plugin also offers the flexibility to configure the default
@@ -39,11 +41,8 @@ The default configuration options are listed below:
 ```lua
 opts = {
     title = " Scratch ",
-    relative = "editor",
     width = 0.8,
     height = 0.8,
-    style = "minimal",
-    border = "rounded",
 }
 ```
 
