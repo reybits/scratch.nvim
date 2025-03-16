@@ -78,6 +78,7 @@ function M.setup(opts)
 
     vim.bo[prop.bufnr].buftype = "nofile"
     vim.bo[prop.bufnr].filetype = "markdown"
+    vim.bo[prop.bufnr].buflisted = false
 
     -- Merge the provided options with the default configuration
     -- opts = vim.tbl_deep_extend("force", M.config, opts)
