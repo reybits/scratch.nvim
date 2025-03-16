@@ -77,14 +77,24 @@ function M.setup(opts)
     prop.bufnr = vim.api.nvim_create_buf(false, false)
 
     vim.bo[prop.bufnr].buftype = "nofile"
+    vim.bo[prop.bufnr].filetype = "markdown"
 
     -- Merge the provided options with the default configuration
     -- opts = vim.tbl_deep_extend("force", M.config, opts)
 
-    vim.api.nvim_buf_set_keymap(prop.bufnr, "n", "q", "<cmd>close<CR>", { noremap = true, silent = true })
+    vim.api.nvim_buf_set_keymap(
+        prop.bufnr,
+        "n",
+        "q",
+        "<cmd>close<CR>",
+        { noremap = true, silent = true }
+    )
 
     -- Bind commands to our lua functions
     vim.api.nvim_create_user_command("ScratchToggle", M.toggle, {})
+
+    -- Enable Treesitter highlighting for the buffer                            │
+    vim.treesitter.start(prop.bufnr, "markdown")
 end
 
 return M
