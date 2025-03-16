@@ -1,18 +1,18 @@
 # Neovim Scratch Buffer
 
-> WARNING: This plugin is still in development and may not be stable!
-
-This plugin provides an easy way to work with scratch buffers in Neovim. It
-allows you to quickly open a scratch buffer in your current window or in a new
-split window. The plugin also offers the flexibility to configure the default
-name and appearance of the scratch buffer.
+This plugin provides a simple way to work with scratch buffers in Neovim.
+It opens a floating window for temporary notes or edits and does not save
+anything to disk. You can quickly open a scratch buffer without affecting
+your current workspace. Additionally, the plugin allows customization of
+the buffer’s default name and appearance.
 
 ## Features:
 
-- Open a scratch buffer in a floating window.
-- Automatically switch to an existing scratch buffer if it already exists.
-- Configure default options for the scratch buffer.
-- The scratch buffer acts as a temporary workspace and is not backed by a file.
+- Open a scratch buffer in a floating window for quick edits.
+- Automatically switch to an existing scratch buffer if one is already open.
+- Customize the default name, appearance, and behavior of the scratch buffer.
+- The scratch buffer is purely temporary and does not save to disk.
+- No interference with existing buffers or files, keeping your workspace clean.
 
 ## Installation
 
@@ -41,6 +41,7 @@ The default configuration options are listed below:
 ```lua
 opts = {
     title = " Scratch ",
+    border = "rounded",
     width = 0.8,
     height = 0.8,
 }
