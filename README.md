@@ -11,10 +11,10 @@ the buffer’s default name and appearance.
 ## Features:
 
 - Open a scratch buffer in a floating window for quick edits.
-- Automatically switch to an existing scratch buffer if one is already open.
 - Customize the default name, appearance, and behavior of the scratch buffer.
 - The scratch buffer is purely temporary and does not save to disk.
 - No interference with existing buffers or files, keeping your workspace clean.
+- Markdow support for rich text editing.
 
 ## Installation
 
