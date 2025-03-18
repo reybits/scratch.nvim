@@ -23,8 +23,6 @@ local prop = {
     border = "rounded",
 }
 
-local group = vim.api.nvim_create_augroup("scratch.nvim", { clear = true })
-
 --- Make the window configuration
 ---@return vim.api.keyset.win_config
 local function make_window_config()
@@ -53,12 +51,12 @@ end
 ---@class scratch.Wnd
 ---@field bufnr number|nil: number of the scratch buffer
 ---@field winnr number|nil: number of the scratch window
----@field footernr number|nil: number of the footer window
+---@field foonr number|nil: number of the footer window
 local wnd = {
     bufnr = nil,
 
     winnr = nil,
-    footernr = nil,
+    foonr = nil,
 }
 
 --- Create a new empty buffer
@@ -91,8 +89,8 @@ local function create_floating_window(config)
     local footer_text = " 'q' to close, 'R' to reset "
     vim.api.nvim_buf_set_lines(footer_buf, 0, -1, false, { footer_text })
 
-    if wnd.footernr == nil or not vim.api.nvim_win_is_valid(wnd.footernr) then
-        wnd.footernr = vim.api.nvim_open_win(footer_buf, false, {
+    if wnd.foonr == nil or not vim.api.nvim_win_is_valid(wnd.foonr) then
+        wnd.foonr = vim.api.nvim_open_win(footer_buf, false, {
             relative = "editor",
             width = #footer_text + 2,
             height = 1,
@@ -112,17 +110,25 @@ local function create_floating_window(config)
 
     -- lock the window to the buffer
     vim.api.nvim_create_autocmd("BufEnter", {
-        group = group,
+        buffer = wnd.bufnr,
         callback = function()
-            local win = vim.api.nvim_get_current_win()
-            local buf = vim.api.nvim_win_get_buf(win)
+            -- local win = vim.api.nvim_get_current_win()
+            -- local buf = vim.api.nvim_win_get_buf(win)
+            --
+            -- if win == wnd.winnr and buf ~= wnd.bufnr then
+            vim.schedule(function()
+                vim.api.nvim_set_current_buf(wnd.bufnr)
+                -- vim.notify("This window is locked to a scratch buffer!", vim.log.levels.WARN)
+            end)
+            -- end
+        end,
+    })
 
-            if win == wnd.winnr and buf ~= wnd.bufnr then
-                vim.schedule(function()
-                    vim.api.nvim_set_current_buf(wnd.bufnr)
-                    -- vim.notify("This window is locked to a scratch buffer!", vim.log.levels.WARN)
-                end)
-            end
+    vim.api.nvim_create_autocmd("BufUnload", {
+        buffer = wnd.bufnr,
+        callback = function()
+            M.close()
+            wnd.bufnr = nil
         end,
     })
 end
@@ -141,8 +147,14 @@ M.toggle = function()
     else
         if wnd.winnr == vim.api.nvim_get_current_win() then
             -- If current window is visible, hide it
-            vim.api.nvim_win_hide(wnd.winnr)
-            vim.api.nvim_win_hide(wnd.footernr)
+            pcall(vim.api.nvim_win_hide, wnd.winnr, true)
+            if wnd.winnr ~= nil and vim.api.nvim_win_is_valid(wnd.winnr) then
+                vim.api.nvim_win_hide(wnd.winnr)
+            end
+
+            if wnd.foonr ~= nil and vim.api.nvim_win_is_valid(wnd.foonr) then
+                vim.api.nvim_win_hide(wnd.foonr)
+            end
 
             -- vim.notify("Hide Win: " .. wnd.winnr .. ", buf: " .. wnd.bufnr)
         else
@@ -157,8 +169,10 @@ end
 
 --- Close the floating window
 M.close = function()
-    vim.api.nvim_win_close(wnd.winnr, true)
-    vim.api.nvim_win_close(wnd.footernr, true)
+    pcall(vim.api.nvim_win_close, wnd.winnr, true)
+    wnd.winnr = nil
+    pcall(vim.api.nvim_win_close, wnd.foonr, true)
+    wnd.foonr = nil
 end
 
 --- Reset the buffer content
