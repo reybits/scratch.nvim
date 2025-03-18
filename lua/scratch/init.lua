@@ -23,28 +23,47 @@ local prop = {
     border = "rounded",
 }
 
+local footer_text = " 'q' to close, 'R' to reset "
+
 --- Make the window configuration
----@return vim.api.keyset.win_config
+--- @return table: A table containing the main and footer window configurations
 local function make_window_config()
-    local config = M.config
+    -- main body window configuration
+    local cfg_wnd = vim.tbl_deep_extend("force", {}, M.config)
 
     if prop.width <= 1.0 then
-        config.width = math.floor(prop.width * vim.o.columns)
+        cfg_wnd.width = math.floor(prop.width * vim.o.columns)
     else
-        config.width = math.floor(prop.width)
+        cfg_wnd.width = math.floor(prop.width)
     end
 
-    config.col = math.floor((vim.o.columns - config.width) / 2)
+    cfg_wnd.col = math.floor((vim.o.columns - cfg_wnd.width) / 2)
 
     if prop.height <= 1.0 then
-        config.height = math.floor(prop.height * vim.o.lines)
+        cfg_wnd.height = math.floor(prop.height * vim.o.lines)
     else
-        config.height = math.floor(prop.height)
+        cfg_wnd.height = math.floor(prop.height)
     end
 
-    config.row = math.floor((vim.o.lines - config.height) / 2)
+    cfg_wnd.row = math.floor((vim.o.lines - cfg_wnd.height) / 2)
 
-    return config
+    -- footer window configuration
+
+    local cfg_foo = vim.tbl_deep_extend("force", {}, M.config)
+
+    cfg_foo.width = #footer_text + 2
+    cfg_foo.height = 1
+    cfg_foo.row = cfg_wnd.row + cfg_wnd.height + 1
+    cfg_foo.col = cfg_wnd.col + math.floor((cfg_wnd.width - #footer_text) / 2)
+    -- cfg_foo.style = "minimal"
+    cfg_foo.border = "none"
+    cfg_foo.zindex = cfg_wnd.zindex + 1
+    cfg_foo.focusable = false
+
+    return {
+        cfg_wnd = cfg_wnd,
+        cfg_foo = cfg_foo,
+    }
 end
 
 --- Internal window state
@@ -79,28 +98,19 @@ local function create_empty_buffer()
 end
 
 --- Create a new scratch Window
----@param config vim.api.keyset.win_config
+---@param config table: vim.api.keyset.win_config
 local function create_floating_window(config)
+    -- print(vim.inspect(config))
+
     -- main window
-    wnd.winnr = vim.api.nvim_open_win(wnd.bufnr, true, config)
+    wnd.winnr = vim.api.nvim_open_win(wnd.bufnr, true, config.cfg_wnd)
 
     -- footer window
     local footer_buf = vim.api.nvim_create_buf(false, true)
-    local footer_text = " 'q' to close, 'R' to reset "
     vim.api.nvim_buf_set_lines(footer_buf, 0, -1, false, { footer_text })
 
     if wnd.foonr == nil or not vim.api.nvim_win_is_valid(wnd.foonr) then
-        wnd.foonr = vim.api.nvim_open_win(footer_buf, false, {
-            relative = "editor",
-            width = #footer_text + 2,
-            height = 1,
-            row = config.row + config.height + 1,
-            col = config.col + math.floor((config.width - #footer_text) / 2),
-            style = "minimal",
-            border = "none",
-            zindex = config.zindex + 1,
-            focusable = false, -- Футер нельзя выбрать
-        })
+        wnd.foonr = vim.api.nvim_open_win(footer_buf, false, config.cfg_foo)
     end
 
     -- lock the window to the buffer
@@ -124,11 +134,37 @@ local function create_floating_window(config)
         end,
     })
 
+    -- handle uloading the buffer (ex. :quit)
+    vim.api.nvim_create_autocmd("BufLeave", {
+        buffer = wnd.bufnr,
+        callback = function()
+            M.close()
+        end,
+    })
+
+    -- handle uloading the buffer (ex. :bd, :bw)
     vim.api.nvim_create_autocmd("BufUnload", {
         buffer = wnd.bufnr,
         callback = function()
             M.close()
             wnd.bufnr = nil
+        end,
+    })
+
+    vim.api.nvim_create_autocmd("VimResized", {
+        group = vim.api.nvim_create_augroup("scratch.nvim-resize", {}),
+        buffer = wnd.bufnr,
+        callback = function()
+            if wnd.winnr == nil or not vim.api.nvim_win_is_valid(wnd.winnr) then
+                return
+            end
+            if wnd.foonr == nil or not vim.api.nvim_win_is_valid(wnd.foonr) then
+                return
+            end
+
+            local cfg = make_window_config()
+            vim.api.nvim_win_set_config(wnd.winnr, cfg.cfg_wnd)
+            vim.api.nvim_win_set_config(wnd.foonr, cfg.cfg_foo)
         end,
     })
 end
@@ -140,8 +176,8 @@ M.toggle = function()
     end
 
     if wnd.winnr == nil or not vim.api.nvim_win_is_valid(wnd.winnr) then
-        local config = make_window_config()
-        create_floating_window(config)
+        local cfg = make_window_config()
+        create_floating_window(cfg)
 
         -- vim.notify("Create Win: " .. wnd.winnr .. ", buf: " .. wnd.bufnr)
     else
