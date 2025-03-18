@@ -1,5 +1,7 @@
 local M = {}
 
+--- Default window configuration
+---@class vim.api.keyset.win_config
 M.config = {
     title_pos = "center",
     relative = "editor",
@@ -12,17 +14,19 @@ M.config = {
     zindex = 50,
 }
 
+--- User configuration
+---@class scratch.Prop
 local prop = {
     title = " Scratch ",
     width = 0.6,
     height = 0.6,
-
-    bufnr = nil,
-
-    winnr = nil,
-    footernr = nil,
+    border = "rounded",
 }
 
+local group = vim.api.nvim_create_augroup("scratch.nvim", { clear = true })
+
+--- Make the window configuration
+---@return vim.api.keyset.win_config
 local function make_window_config()
     local config = M.config
 
@@ -45,28 +49,61 @@ local function make_window_config()
     return config
 end
 
-local function createWindow()
-    local config = make_window_config()
+--- Internal window state
+---@class scratch.Wnd
+---@field bufnr number|nil: number of the scratch buffer
+---@field winnr number|nil: number of the scratch window
+---@field footernr number|nil: number of the footer window
+local wnd = {
+    bufnr = nil,
 
+    winnr = nil,
+    footernr = nil,
+}
+
+--- Create a new empty buffer
+---@eturn number scratch buffer number
+local function create_empty_buffer()
+    local bufnr = vim.api.nvim_create_buf(false, true)
+
+    vim.bo[bufnr].buftype = "nofile"
+    vim.bo[bufnr].filetype = "markdown"
+    vim.bo[bufnr].buflisted = false
+    vim.bo[bufnr].swapfile = false
+    vim.bo[bufnr].bufhidden = "hide"
+
+    -- Enable Treesitter highlighting for the buffer
+    vim.treesitter.start(bufnr, "markdown")
+
+    -- TODO: Disable the buffer deletion
+
+    return bufnr
+end
+
+--- Create a new scratch Window
+---@param config vim.api.keyset.win_config
+local function create_floating_window(config)
     -- main window
-    prop.winnr = vim.api.nvim_open_win(prop.bufnr, true, config)
+    wnd.winnr = vim.api.nvim_open_win(wnd.bufnr, true, config)
 
     -- footer window
     local footer_buf = vim.api.nvim_create_buf(false, true)
     local footer_text = " 'q' to close, 'R' to reset "
     vim.api.nvim_buf_set_lines(footer_buf, 0, -1, false, { footer_text })
 
-    prop.footernr = vim.api.nvim_open_win(footer_buf, false, {
-        relative = "editor",
-        width = #footer_text + 2,
-        height = 1,
-        row = config.row + config.height + 1,
-        col = config.col + math.floor((config.width - #footer_text) / 2),
-        style = "minimal",
-        border = "none",
-        zindex = config.zindex + 1,
-        focusable = false, -- Футер нельзя выбрать
-    })
+    if wnd.footernr == nil or not vim.api.nvim_win_is_valid(wnd.footernr) then
+        wnd.footernr = vim.api.nvim_open_win(footer_buf, false, {
+            relative = "editor",
+            width = #footer_text + 2,
+            height = 1,
+            row = config.row + config.height + 1,
+            col = config.col + math.floor((config.width - #footer_text) / 2),
+            style = "minimal",
+            border = "none",
+            zindex = config.zindex + 1,
+            focusable = false, -- Футер нельзя выбрать
+        })
+    end
 
     -- lock the window to the buffer
     -- unfortunately, this interferes with the fzf-lua
@@ -75,14 +112,14 @@ local function createWindow()
 
     -- lock the window to the buffer
     vim.api.nvim_create_autocmd("BufEnter", {
-        group = vim.api.nvim_create_augroup("scratch.nvim", { clear = true }),
-        callback = function(event)
+        group = group,
+        callback = function()
             local win = vim.api.nvim_get_current_win()
             local buf = vim.api.nvim_win_get_buf(win)
 
-            if win == prop.winnr and buf ~= prop.bufnr then
+            if win == wnd.winnr and buf ~= wnd.bufnr then
                 vim.schedule(function()
-                    vim.api.nvim_set_current_buf(prop.bufnr)
+                    vim.api.nvim_set_current_buf(wnd.bufnr)
                     -- vim.notify("This window is locked to a scratch buffer!", vim.log.levels.WARN)
                 end)
             end
@@ -90,49 +127,47 @@ local function createWindow()
     })
 end
 
+-- Toggle the visibility of the floating window
 M.toggle = function()
-    if prop.winnr == nil or not vim.api.nvim_win_is_valid(prop.winnr) then
-        createWindow()
+    if wnd.bufnr == nil or not vim.api.nvim_buf_is_valid(wnd.bufnr) then
+        wnd.bufnr = create_empty_buffer()
+    end
 
-        -- vim.notify("Create Win: " .. prop.winnr .. ", buf: " .. prop.bufnr)
+    if wnd.winnr == nil or not vim.api.nvim_win_is_valid(wnd.winnr) then
+        local config = make_window_config()
+        create_floating_window(config)
+
+        -- vim.notify("Create Win: " .. wnd.winnr .. ", buf: " .. wnd.bufnr)
     else
-        if prop.winnr == vim.api.nvim_get_current_win() then
+        if wnd.winnr == vim.api.nvim_get_current_win() then
             -- If current window is visible, hide it
-            M.close()
+            vim.api.nvim_win_hide(wnd.winnr)
+            vim.api.nvim_win_hide(wnd.footernr)
 
-            -- vim.notify("Hide Win: " .. prop.winnr .. ", buf: " .. prop.bufnr)
+            -- vim.notify("Hide Win: " .. wnd.winnr .. ", buf: " .. wnd.bufnr)
         else
             -- Set focus on the floating window
-            vim.api.nvim_set_current_win(prop.winnr)
+            vim.api.nvim_set_current_win(wnd.winnr)
             vim.wo.cursorline = false
 
-            -- vim.notify("Show Win: " .. prop.winnr .. ", buf: " .. prop.bufnr)
+            -- vim.notify("Show Win: " .. wnd.winnr .. ", buf: " .. wnd.bufnr)
         end
     end
 end
 
+--- Close the floating window
 M.close = function()
-    vim.api.nvim_win_hide(prop.winnr)
-    vim.api.nvim_win_hide(prop.footernr)
+    vim.api.nvim_win_close(wnd.winnr, true)
+    vim.api.nvim_win_close(wnd.footernr, true)
 end
 
+--- Reset the buffer content
 M.reset = function()
-    vim.api.nvim_buf_set_lines(prop.bufnr, 0, -1, false, {})
+    vim.api.nvim_buf_set_lines(wnd.bufnr, 0, -1, false, {})
 end
 
--- create a new empty buffer
-local function createBuffer()
-    local bufnr = vim.api.nvim_create_buf(false, false)
-
-    vim.bo[bufnr].buftype = "nofile"
-    vim.bo[bufnr].filetype = "markdown"
-    vim.bo[bufnr].buflisted = false
-    vim.bo[bufnr].swapfile = false
-    vim.bo[bufnr].bufhidden = "hide"
-
-    return bufnr
-end
-
+--- Setup the plugin
+---@param opts scratch.Prop
 function M.setup(opts)
     opts = opts or {}
     M.config.title = opts.title or prop.title
@@ -140,34 +175,19 @@ function M.setup(opts)
     prop.width = opts.width or prop.width
     prop.height = opts.height or prop.height
 
-    prop.bufnr = createBuffer()
-
     -- Merge the provided options with the default configuration
     -- opts = vim.tbl_deep_extend("force", M.config, opts)
 
-    -- Enable Treesitter highlighting for the buffer
-    vim.treesitter.start(prop.bufnr, "markdown")
-
     -- Bind commands to our lua functions
     vim.api.nvim_create_user_command("ScratchToggle", M.toggle, {})
-    vim.api.nvim_create_user_command("ScratchReset", M.reset, {})
-    vim.api.nvim_create_user_command("ScratchClose", M.close, {})
 
-    vim.api.nvim_buf_set_keymap(
-        prop.bufnr,
-        "n",
-        "q",
-        "<cmd>ScratchClose<cr>",
-        { noremap = true, silent = true }
-    )
+    vim.keymap.set("n", "q", function()
+        M.close()
+    end, { buffer = wnd.bufnr, noremap = true, silent = true })
 
-    vim.api.nvim_buf_set_keymap(
-        prop.bufnr,
-        "n",
-        "R",
-        "<cmd>ScratchReset<cr>",
-        { noremap = true, silent = true }
-    )
+    vim.keymap.set("n", "R", function()
+        M.reset()
+    end, { buffer = wnd.bufnr, noremap = true, silent = true })
 end
 
 return M
