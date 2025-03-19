@@ -23,7 +23,7 @@ local prop = {
     border = "rounded",
 }
 
-local footer_text = " 'q' to close, 'R' to reset "
+local footer_text = "'q' to close, 'R' to reset"
 
 --- Make the window configuration
 --- @return table: A table containing the main and footer window configurations
@@ -107,7 +107,7 @@ local function create_floating_window(config)
 
     -- footer window
     local footer_buf = vim.api.nvim_create_buf(false, true)
-    vim.api.nvim_buf_set_lines(footer_buf, 0, -1, false, { footer_text })
+    vim.api.nvim_buf_set_lines(footer_buf, 0, -1, false, { " " .. footer_text })
 
     if wnd.foonr == nil or not vim.api.nvim_win_is_valid(wnd.foonr) then
         wnd.foonr = vim.api.nvim_open_win(footer_buf, false, config.cfg_foo)
