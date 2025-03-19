@@ -6,7 +6,7 @@ anything to disk. You can quickly open a scratch buffer without affecting
 your current workspace. Additionally, the plugin allows customization of
 the buffer’s default name and appearance.
 
-![scratch.nvim](https://github.com/user-attachments/assets/89a154a0-96d7-4a04-916e-0ca8883f8a03)
+![scratch.nvim](https://github.com/user-attachments/assets/a409f547-12ec-4d5b-b395-b4de8d51fae9)
 
 ## Features:
 
