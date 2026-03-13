@@ -1,24 +1,23 @@
 # Neovim Scratch Buffer
 
-This plugin provides a simple way to work with scratch buffers in Neovim.
-It opens a floating window for temporary notes or edits and does not save
-anything to disk. You can quickly open a scratch buffer without affecting
-your current workspace. Additionally, the plugin allows customization of
-the buffer’s default name and appearance.
+A Neovim plugin for quick scratch notes in a floating window. Supports
+three note types: temporary (in-memory), local (per-project, saved to disk),
+and global (shared across projects, saved to disk). Switch between them with
+`Tab`/`S-Tab`.
 
 ![scratch.nvim](https://github.com/user-attachments/assets/a409f547-12ec-4d5b-b395-b4de8d51fae9)
 
-## Features:
+## Features
 
-- Open a scratch buffer in a floating window for quick edits.
-- Customize the default name, appearance, and behavior of the scratch buffer.
-- The scratch buffer is purely temporary and does not save to disk.
-- No interference with existing buffers or files, keeping your workspace clean.
-- Markdow support for rich text editing.
+- Floating scratch window with markdown and Treesitter highlighting.
+- **Temporary notes** — in-memory, never written to disk.
+- **Local notes** — persisted per-project (`.scratch.md` at the git root).
+- **Global notes** — persisted across projects (`stdpath("data")/scratch.nvim/global.md`).
+- Cycle between note types with `Tab` / `S-Tab`.
+- Notes auto-save on close, type switch, and `VimLeavePre`.
+- Configurable window size, border, title, and behavior.
 
 ## Installation
-
-To install this plugin, you can use your favorite Neovim package manager. For example:
 
 ### [Lazy](https://github.com/folke/lazy.nvim)
 
@@ -36,32 +35,48 @@ To install this plugin, you can use your favorite Neovim package manager. For ex
 }
 ```
 
-### Configuring
+## Configuration
 
-The default configuration options are listed below:
+Default options:
 
 ```lua
 opts = {
-    title = " Scratch ",
+    title = "Scratch",
     border = "rounded",
-    width = 0.8,
-    height = 0.8,
+    width = 0.6,
+    height = 0.6,
+    local_notes = true,           -- enable per-project notes
+    global_notes = true,          -- enable global notes
+    local_notes_file = ".scratch.md",  -- filename for local notes
+    close_on_leave = true,        -- close window when leaving the buffer
 }
 ```
+
+Set `local_notes = false` or `global_notes = false` to disable a note type.
+When only one type is enabled, the type label and switch keymaps are hidden.
 
 ## Usage
 
 ### Commands
 
-The plugin provides two commands:
+- `:ScratchToggle` — Open or close the scratch window.
 
-- `:ScratchToggle` — Opens or Closes scratch buffer.
+### Keymaps (inside the scratch window)
 
-### Lua Functions
+| Key       | Action                        |
+|-----------|-------------------------------|
+| `q`       | Close the scratch window      |
+| `R`       | Reset (clear) the current note|
+| `Tab`     | Switch to next note type      |
+| `S-Tab`   | Switch to previous note type  |
 
-You can also use the plugin's Lua functions directly:
+### Lua API
 
-- `require('scratch').toggle()` — Equivalent to `:ScratchToggle`.
+- `require('scratch').toggle()` — Toggle the scratch window.
+- `require('scratch').close()` — Close the scratch window.
+- `require('scratch').reset()` — Clear the current note buffer.
+- `require('scratch').next_type()` — Switch to the next note type.
+- `require('scratch').prev_type()` — Switch to the previous note type.
 
 ## License
 
