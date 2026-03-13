@@ -1,64 +1,224 @@
 local M = {}
 
---- Default window configuration
----@class vim.api.keyset.win_config
-M.config = {
-    title_pos = "center",
-    relative = "editor",
-    border = "rounded",
-    width = 1,
-    height = 1,
-    row = 1,
-    col = 1,
-    style = "minimal",
-    zindex = 50,
-}
-
---- User configuration
----@class scratch.Prop
-local prop = {
-    title = " Scratch ",
+--- Default configuration
+---@class scratch.Config
+local defaults = {
+    title = "Scratch",
     width = 0.6,
     height = 0.6,
     border = "rounded",
+    local_notes = true,
+    global_notes = true,
+    close_on_leave = true,
 }
 
-local footer_text = "'q' to close, 'R' to reset"
+--- Merged configuration (set during setup)
+---@type scratch.Config
+local config = vim.tbl_deep_extend("force", {}, defaults)
 
---- Make the window configuration
---- @return table: A table containing the main and footer window configurations
+--- Internal state
+---@class scratch.State
+---@field buffers table<string, number|nil>
+---@field winnr number|nil
+---@field foonr number|nil
+---@field foo_bufnr number|nil
+---@field current_type string
+---@field closing boolean
+---@field project_root string|nil
+local state = {
+    buffers = {},
+    winnr = nil,
+    foonr = nil,
+    foo_bufnr = nil,
+    current_type = "temp",
+    closing = false,
+    switching = false,
+    project_root = nil,
+}
+
+local augroup = vim.api.nvim_create_augroup("scratch.nvim", { clear = true })
+
+-- ── Persistence helpers ─────────────────────────────────────────────
+
+--- Find the project root (git root or cwd)
+---@return string
+local function find_project_root()
+    if state.project_root then
+        return state.project_root
+    end
+    local result = vim.fn.systemlist("git rev-parse --show-toplevel 2>/dev/null")
+    if vim.v.shell_error == 0 and result[1] then
+        state.project_root = result[1]
+    else
+        state.project_root = vim.fn.getcwd()
+    end
+    return state.project_root
+end
+
+--- Get the file path for a note type
+---@param type string
+---@return string|nil
+local function note_path(type)
+    if type == "temp" then
+        return nil
+    elseif type == "local" then
+        return find_project_root() .. "/.scratch.md"
+    elseif type == "global" then
+        return vim.fn.stdpath("data") .. "/scratch.nvim/global.md"
+    end
+end
+
+--- Load file contents into a buffer
+---@param bufnr number
+---@param path string
+local function load_file(bufnr, path)
+    if vim.fn.filereadable(path) == 1 then
+        local lines = vim.fn.readfile(path)
+        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+    end
+end
+
+--- Save buffer contents to a file
+---@param bufnr number
+---@param path string
+local function save_file(bufnr, path)
+    if not vim.api.nvim_buf_is_valid(bufnr) then
+        return
+    end
+    local dir = vim.fn.fnamemodify(path, ":h")
+    if vim.fn.isdirectory(dir) == 0 then
+        vim.fn.mkdir(dir, "p")
+    end
+    local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+    vim.fn.writefile(lines, path)
+end
+
+--- Save the current note type to disk (if applicable)
+local function save_current()
+    local bufnr = state.buffers[state.current_type]
+    if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+        local path = note_path(state.current_type)
+        if path then
+            save_file(bufnr, path)
+        end
+    end
+end
+
+--- Save all persistent note types to disk
+local function save_all()
+    for type, bufnr in pairs(state.buffers) do
+        if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+            local path = note_path(type)
+            if path then
+                save_file(bufnr, path)
+            end
+        end
+    end
+end
+
+-- ── Type helpers ────────────────────────────────────────────────────
+
+--- Get ordered list of enabled note types
+---@return string[]
+local function enabled_types()
+    local types = { "temp" }
+    if config.local_notes then
+        table.insert(types, "local")
+    end
+    if config.global_notes then
+        table.insert(types, "global")
+    end
+    return types
+end
+
+--- Get display label for a note type
+---@param type string
+---@return string
+local function type_label(type)
+    local labels = {
+        temp = "Temporary",
+        ["local"] = "Local",
+        global = "Global",
+    }
+    return labels[type] or type
+end
+
+-- ── Title & footer builders ─────────────────────────────────────────
+
+--- Build the window title string
+---@return string
+local function build_title()
+    local types = enabled_types()
+    if #types == 1 then
+        return " " .. config.title .. " "
+    end
+    return " " .. config.title .. " [" .. type_label(state.current_type) .. "] "
+end
+
+--- Build the footer text string
+---@return string
+local function build_footer_text()
+    local types = enabled_types()
+    local parts = { "'q' close", "'R' reset" }
+    if #types > 1 then
+        table.insert(parts, "'Tab'/'S-Tab' switch note")
+    end
+    return table.concat(parts, "  |  ")
+end
+
+-- ── Window config builder ───────────────────────────────────────────
+
+---@class scratch.WinConfig
+---@field cfg_wnd vim.api.keyset.win_config
+---@field cfg_foo vim.api.keyset.win_config
+
+--- Build main and footer window configurations
+---@return scratch.WinConfig
 local function make_window_config()
-    -- main body window configuration
-    local cfg_wnd = vim.tbl_deep_extend("force", {}, M.config)
+    local width, height
 
-    if prop.width <= 1.0 then
-        cfg_wnd.width = math.floor(prop.width * vim.o.columns)
+    if config.width > 0 and config.width <= 1 then
+        width = math.floor(config.width * vim.o.columns)
     else
-        cfg_wnd.width = math.floor(prop.width)
+        width = math.floor(config.width)
     end
 
-    cfg_wnd.col = math.floor((vim.o.columns - cfg_wnd.width) / 2)
-
-    if prop.height <= 1.0 then
-        cfg_wnd.height = math.floor(prop.height * vim.o.lines)
+    if config.height > 0 and config.height <= 1 then
+        height = math.floor(config.height * vim.o.lines)
     else
-        cfg_wnd.height = math.floor(prop.height)
+        height = math.floor(config.height)
     end
 
-    cfg_wnd.row = math.floor((vim.o.lines - cfg_wnd.height) / 2)
+    local row = math.floor((vim.o.lines - height) / 2)
+    local col = math.floor((vim.o.columns - width) / 2)
 
-    -- footer window configuration
+    local title = build_title()
+    local footer_text = build_footer_text()
 
-    local cfg_foo = vim.tbl_deep_extend("force", {}, M.config)
+    local cfg_wnd = {
+        relative = "editor",
+        border = config.border,
+        style = "minimal",
+        zindex = 50,
+        title = title,
+        title_pos = "center",
+        width = width,
+        height = height,
+        row = row,
+        col = col,
+    }
 
-    cfg_foo.width = #footer_text + 2
-    cfg_foo.height = 1
-    cfg_foo.row = cfg_wnd.row + cfg_wnd.height + 1
-    cfg_foo.col = cfg_wnd.col + math.floor((cfg_wnd.width - #footer_text) / 2)
-    -- cfg_foo.style = "minimal"
-    cfg_foo.border = "none"
-    cfg_foo.zindex = cfg_wnd.zindex + 1
-    cfg_foo.focusable = false
+    local cfg_foo = {
+        relative = "editor",
+        style = "minimal",
+        zindex = 51,
+        border = "none",
+        focusable = false,
+        width = #footer_text + 2,
+        height = 1,
+        row = row + height + 1,
+        col = col + math.floor((width - #footer_text) / 2),
+    }
 
     return {
         cfg_wnd = cfg_wnd,
@@ -66,22 +226,18 @@ local function make_window_config()
     }
 end
 
---- Internal window state
----@class scratch.Wnd
----@field bufnr number|nil: number of the scratch buffer
----@field winnr number|nil: number of the scratch window
----@field foonr number|nil: number of the footer window
-local wnd = {
-    bufnr = nil,
+-- ── Buffer creation ─────────────────────────────────────────────────
 
-    winnr = nil,
-    foonr = nil,
-}
+--- Get or create a buffer for the given note type
+---@param type string
+---@return number bufnr
+local function get_or_create_buffer(type)
+    local bufnr = state.buffers[type]
+    if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+        return bufnr
+    end
 
---- Create a new empty buffer
----@eturn number scratch buffer number
-local function create_empty_buffer()
-    local bufnr = vim.api.nvim_create_buf(false, true)
+    bufnr = vim.api.nvim_create_buf(false, true)
 
     vim.bo[bufnr].buftype = "nofile"
     vim.bo[bufnr].filetype = "markdown"
@@ -89,155 +245,249 @@ local function create_empty_buffer()
     vim.bo[bufnr].swapfile = false
     vim.bo[bufnr].bufhidden = "hide"
 
-    -- Enable Treesitter highlighting for the buffer
     vim.treesitter.start(bufnr, "markdown")
 
-    -- TODO: Disable the buffer deletion
-
-    return bufnr
-end
-
---- Create a new scratch Window
----@param config table: vim.api.keyset.win_config
-local function create_floating_window(config)
-    -- print(vim.inspect(config))
-
-    -- main window
-    wnd.winnr = vim.api.nvim_open_win(wnd.bufnr, true, config.cfg_wnd)
-
-    -- footer window
-    local footer_buf = vim.api.nvim_create_buf(false, true)
-    vim.api.nvim_buf_set_lines(footer_buf, 0, -1, false, { " " .. footer_text })
-
-    if wnd.foonr == nil or not vim.api.nvim_win_is_valid(wnd.foonr) then
-        wnd.foonr = vim.api.nvim_open_win(footer_buf, false, config.cfg_foo)
+    -- Load from disk if applicable
+    local path = note_path(type)
+    if path then
+        load_file(bufnr, path)
     end
 
-    -- lock the window to the buffer
-    -- unfortunately, this interferes with the fzf-lua
-    -- fzf-lua opens buffer in the new created split
-    -- vim.wo.winfixbuf = true
-
-    -- lock the window to the buffer
-    vim.api.nvim_create_autocmd("BufEnter", {
-        buffer = wnd.bufnr,
-        callback = function()
-            -- local win = vim.api.nvim_get_current_win()
-            -- local buf = vim.api.nvim_win_get_buf(win)
-            --
-            -- if win == wnd.winnr and buf ~= wnd.bufnr then
-            vim.schedule(function()
-                vim.api.nvim_set_current_buf(wnd.bufnr)
-                -- vim.notify("This window is locked to a scratch buffer!", vim.log.levels.WARN)
-            end)
-            -- end
-        end,
-    })
-
-    -- handle uloading the buffer (ex. :quit)
-    vim.api.nvim_create_autocmd("BufLeave", {
-        buffer = wnd.bufnr,
-        callback = function()
-            M.close()
-        end,
-    })
-
-    -- handle uloading the buffer (ex. :bd, :bw)
-    vim.api.nvim_create_autocmd("BufUnload", {
-        buffer = wnd.bufnr,
-        callback = function()
-            M.close()
-            wnd.bufnr = nil
-        end,
-    })
-
-    vim.api.nvim_create_autocmd("VimResized", {
-        group = vim.api.nvim_create_augroup("scratch.nvim-resize", {}),
-        buffer = wnd.bufnr,
-        callback = function()
-            if wnd.winnr == nil or not vim.api.nvim_win_is_valid(wnd.winnr) then
-                return
-            end
-            if wnd.foonr == nil or not vim.api.nvim_win_is_valid(wnd.foonr) then
-                return
-            end
-
-            local cfg = make_window_config()
-            vim.api.nvim_win_set_config(wnd.winnr, cfg.cfg_wnd)
-            vim.api.nvim_win_set_config(wnd.foonr, cfg.cfg_foo)
-        end,
-    })
-end
-
--- Toggle the visibility of the floating window
-M.toggle = function()
-    if wnd.bufnr == nil or not vim.api.nvim_buf_is_valid(wnd.bufnr) then
-        wnd.bufnr = create_empty_buffer()
-    end
-
-    if wnd.winnr == nil or not vim.api.nvim_win_is_valid(wnd.winnr) then
-        local cfg = make_window_config()
-        create_floating_window(cfg)
-
-        -- vim.notify("Create Win: " .. wnd.winnr .. ", buf: " .. wnd.bufnr)
-    else
-        if wnd.winnr == vim.api.nvim_get_current_win() then
-            -- If current window is visible, hide it
-            pcall(vim.api.nvim_win_hide, wnd.winnr, true)
-            if wnd.winnr ~= nil and vim.api.nvim_win_is_valid(wnd.winnr) then
-                vim.api.nvim_win_hide(wnd.winnr)
-            end
-
-            if wnd.foonr ~= nil and vim.api.nvim_win_is_valid(wnd.foonr) then
-                vim.api.nvim_win_hide(wnd.foonr)
-            end
-
-            -- vim.notify("Hide Win: " .. wnd.winnr .. ", buf: " .. wnd.bufnr)
-        else
-            -- Set focus on the floating window
-            vim.api.nvim_set_current_win(wnd.winnr)
-            vim.wo.cursorline = false
-
-            -- vim.notify("Show Win: " .. wnd.winnr .. ", buf: " .. wnd.bufnr)
-        end
-    end
-end
-
---- Close the floating window
-M.close = function()
-    pcall(vim.api.nvim_win_close, wnd.winnr, true)
-    wnd.winnr = nil
-    pcall(vim.api.nvim_win_close, wnd.foonr, true)
-    wnd.foonr = nil
-end
-
---- Reset the buffer content
-M.reset = function()
-    vim.api.nvim_buf_set_lines(wnd.bufnr, 0, -1, false, {})
-end
-
---- Setup the plugin
----@param opts scratch.Prop
-function M.setup(opts)
-    opts = opts or {}
-    M.config.title = opts.title or prop.title
-    M.config.border = opts.border or M.config.border
-    prop.width = opts.width or prop.width
-    prop.height = opts.height or prop.height
-
-    -- Merge the provided options with the default configuration
-    -- opts = vim.tbl_deep_extend("force", M.config, opts)
-
-    -- Bind commands to our lua functions
-    vim.api.nvim_create_user_command("ScratchToggle", M.toggle, {})
-
+    -- Set keymaps on the buffer
     vim.keymap.set("n", "q", function()
         M.close()
-    end, { buffer = wnd.bufnr, noremap = true, silent = true })
+    end, { buffer = bufnr, noremap = true, silent = true })
 
     vim.keymap.set("n", "R", function()
         M.reset()
-    end, { buffer = wnd.bufnr, noremap = true, silent = true })
+    end, { buffer = bufnr, noremap = true, silent = true })
+
+    local types = enabled_types()
+    if #types > 1 then
+        vim.keymap.set("n", "<Tab>", function()
+            M.next_type()
+        end, { buffer = bufnr, noremap = true, silent = true })
+
+        vim.keymap.set("n", "<S-Tab>", function()
+            M.prev_type()
+        end, { buffer = bufnr, noremap = true, silent = true })
+    end
+
+    state.buffers[type] = bufnr
+    return bufnr
+end
+
+-- ── Footer helpers ──────────────────────────────────────────────────
+
+--- Get or create the footer buffer
+---@return number bufnr
+local function get_or_create_footer_buf()
+    if state.foo_bufnr and vim.api.nvim_buf_is_valid(state.foo_bufnr) then
+        return state.foo_bufnr
+    end
+    state.foo_bufnr = vim.api.nvim_create_buf(false, true)
+    return state.foo_bufnr
+end
+
+--- Update footer buffer contents
+local function update_footer()
+    local bufnr = get_or_create_footer_buf()
+    local text = build_footer_text()
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { " " .. text })
+end
+
+-- ── Window update helper ────────────────────────────────────────────
+
+--- Update window title and footer after a type switch or resize
+local function update_windows()
+    if not state.winnr or not vim.api.nvim_win_is_valid(state.winnr) then
+        return
+    end
+
+    local cfg = make_window_config()
+    vim.api.nvim_win_set_config(state.winnr, cfg.cfg_wnd)
+
+    update_footer()
+    if state.foonr and vim.api.nvim_win_is_valid(state.foonr) then
+        vim.api.nvim_win_set_config(state.foonr, cfg.cfg_foo)
+    end
+end
+
+-- ── Window management ───────────────────────────────────────────────
+
+--- Open the scratch floating window
+local function open_window()
+    local bufnr = get_or_create_buffer(state.current_type)
+    local cfg = make_window_config()
+
+    -- Main window
+    state.winnr = vim.api.nvim_open_win(bufnr, true, cfg.cfg_wnd)
+    vim.wo[state.winnr].cursorline = false
+
+    -- Footer window
+    update_footer()
+    local foo_bufnr = get_or_create_footer_buf()
+    state.foonr = vim.api.nvim_open_win(foo_bufnr, false, cfg.cfg_foo)
+
+    -- Set up autocmds (clear previous ones)
+    vim.api.nvim_clear_autocmds({ group = augroup })
+
+    -- WinClosed for main window
+    vim.api.nvim_create_autocmd("WinClosed", {
+        group = augroup,
+        pattern = tostring(state.winnr),
+        once = true,
+        callback = function()
+            M.close()
+        end,
+    })
+
+    -- BufLeave
+    if config.close_on_leave then
+        vim.api.nvim_create_autocmd("BufLeave", {
+            group = augroup,
+            buffer = bufnr,
+            callback = function()
+                if not state.switching then
+                    M.close()
+                end
+            end,
+        })
+    end
+
+    -- VimResized
+    vim.api.nvim_create_autocmd("VimResized", {
+        group = augroup,
+        callback = function()
+            update_windows()
+        end,
+    })
+end
+
+-- ── Public API ──────────────────────────────────────────────────────
+
+--- Cycle through note types
+---@param offset number: 1 for next, -1 for previous
+local function cycle_type(offset)
+    if not state.winnr or not vim.api.nvim_win_is_valid(state.winnr) then
+        return
+    end
+
+    local types = enabled_types()
+    if #types <= 1 then
+        return
+    end
+
+    -- Save current before switching
+    save_current()
+
+    -- Find current index
+    local current_idx = 1
+    for i, t in ipairs(types) do
+        if t == state.current_type then
+            current_idx = i
+            break
+        end
+    end
+
+    -- Compute next index (wrapping)
+    local next_idx = ((current_idx - 1 + offset) % #types) + 1
+    state.current_type = types[next_idx]
+
+    -- Get or create the buffer for the new type
+    local bufnr = get_or_create_buffer(state.current_type)
+
+    -- Swap buffer in window (guard against BufLeave firing during swap)
+    state.switching = true
+    vim.api.nvim_win_set_buf(state.winnr, bufnr)
+    state.switching = false
+
+    -- Re-register BufLeave for the new buffer
+    vim.api.nvim_clear_autocmds({ group = augroup, event = "BufLeave" })
+    if config.close_on_leave then
+        vim.api.nvim_create_autocmd("BufLeave", {
+            group = augroup,
+            buffer = bufnr,
+            callback = function()
+                if not state.switching then
+                    M.close()
+                end
+            end,
+        })
+    end
+
+    -- Update title and footer
+    update_windows()
+end
+
+--- Toggle the scratch window
+M.toggle = function()
+    if state.winnr and vim.api.nvim_win_is_valid(state.winnr) then
+        if state.winnr == vim.api.nvim_get_current_win() then
+            M.close()
+        else
+            vim.api.nvim_set_current_win(state.winnr)
+        end
+        return
+    end
+
+    open_window()
+end
+
+--- Close the scratch window
+M.close = function()
+    if state.closing then
+        return
+    end
+    state.closing = true
+
+    save_current()
+
+    pcall(vim.api.nvim_win_close, state.winnr, true)
+    state.winnr = nil
+
+    pcall(vim.api.nvim_win_close, state.foonr, true)
+    state.foonr = nil
+
+    vim.api.nvim_clear_autocmds({ group = augroup })
+
+    state.closing = false
+end
+
+--- Reset the current buffer content
+M.reset = function()
+    local bufnr = state.buffers[state.current_type]
+    if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {})
+    end
+end
+
+--- Switch to the next note type
+M.next_type = function()
+    cycle_type(1)
+end
+
+--- Switch to the previous note type
+M.prev_type = function()
+    cycle_type(-1)
+end
+
+--- Setup the plugin
+---@param opts scratch.Config|nil
+function M.setup(opts)
+    opts = opts or {}
+    config = vim.tbl_deep_extend("force", {}, defaults, opts)
+
+    vim.api.nvim_create_user_command("ScratchToggle", M.toggle, {})
+
+    -- Save all persistent notes on VimLeavePre
+    local leave_augroup = vim.api.nvim_create_augroup("scratch.nvim-leave", { clear = true })
+    vim.api.nvim_create_autocmd("VimLeavePre", {
+        group = leave_augroup,
+        callback = function()
+            save_all()
+        end,
+    })
 end
 
 return M
