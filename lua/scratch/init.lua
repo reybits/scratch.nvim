@@ -184,13 +184,14 @@ local function make_window_config()
         width = math.floor(config.width)
     end
 
+    local available_lines = vim.o.lines - vim.o.cmdheight - (vim.o.laststatus > 0 and 1 or 0)
+
     if config.height > 0 and config.height <= 1 then
-        height = math.floor(config.height * vim.o.lines)
+        height = math.floor(config.height * available_lines)
     else
         height = math.floor(config.height)
     end
-
-    local row = math.floor((vim.o.lines - height) / 2)
+    local row = math.floor((available_lines - height) / 2)
     local col = math.floor((vim.o.columns - width) / 2)
 
     local title = build_title()
