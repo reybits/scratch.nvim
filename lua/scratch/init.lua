@@ -10,6 +10,7 @@ local defaults = {
     local_notes = true,
     global_notes = true,
     close_on_leave = true,
+    local_notes_file = ".scratch.md",
 }
 
 --- Merged configuration (set during setup)
@@ -62,7 +63,7 @@ local function note_path(type)
     if type == "temp" then
         return nil
     elseif type == "local" then
-        return find_project_root() .. "/.scratch.md"
+        return find_project_root() .. "/" .. config.local_notes_file
     elseif type == "global" then
         return vim.fn.stdpath("data") .. "/scratch.nvim/global.md"
     end
