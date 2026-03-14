@@ -117,6 +117,17 @@ local function save_all()
     end
 end
 
+--- Reload the current note type from disk (if applicable)
+local function reload_current()
+    local bufnr = state.buffers[state.current_type]
+    if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+        local path = note_path(state.current_type)
+        if path then
+            load_file(bufnr, path)
+        end
+    end
+end
+
 -- ── Type helpers ────────────────────────────────────────────────────
 
 --- Get ordered list of enabled note types
@@ -320,6 +331,7 @@ end
 --- Open the scratch floating window
 local function open_window()
     local bufnr = get_or_create_buffer(state.current_type)
+    reload_current()
     local cfg = make_window_config()
 
     -- Main window
@@ -403,6 +415,9 @@ local function cycle_type(offset)
     state.switching = true
     vim.api.nvim_win_set_buf(state.winnr, bufnr)
     state.switching = false
+
+    -- Reload from disk to pick up changes from other sessions
+    reload_current()
 
     -- Re-register BufLeave for the new buffer
     vim.api.nvim_clear_autocmds({ group = augroup, event = "BufLeave" })
