@@ -45,15 +45,40 @@ opts = {
     border = "rounded",
     width = 0.6,
     height = 0.6,
-    local_notes = true,           -- enable per-project notes
-    global_notes = true,          -- enable global notes
-    local_notes_file = ".scratch.md",  -- filename for local notes
-    close_on_leave = true,        -- close window when leaving the buffer
+
+    -- enable per-project notes
+    local_notes = true,
+
+    -- enable global notes
+    global_notes = true,
+
+    -- filename for local notes
+    local_notes_file = ".scratch.md",
+
+    -- close window when leaving the buffer
+    close_on_leave = true,
+
+    -- window-local options (vim.wo)
+    win_opts = {
+        wrap = true,
+    },
 }
 ```
 
 Set `local_notes = false` or `global_notes = false` to disable a note type.
 When only one type is enabled, the type label and switch keymaps are hidden.
+
+`win_opts` accepts any `vim.wo` option. For example:
+
+```lua
+opts = {
+    win_opts = {
+        wrap = true,
+        linebreak = true,
+        number = true,
+    },
+}
+```
 
 ## Usage
 

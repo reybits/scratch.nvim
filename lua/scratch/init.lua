@@ -11,6 +11,9 @@ local defaults = {
     global_notes = true,
     close_on_leave = true,
     local_notes_file = ".scratch.md",
+    win_opts = {
+        wrap = true,
+    },
 }
 
 --- Merged configuration (set during setup)
@@ -336,7 +339,9 @@ local function open_window()
 
     -- Main window
     state.winnr = vim.api.nvim_open_win(bufnr, true, cfg.cfg_wnd)
-    vim.wo[state.winnr].cursorline = false
+    for opt, val in pairs(config.win_opts) do
+        vim.wo[state.winnr][opt] = val
+    end
 
     -- Footer window
     update_footer()
