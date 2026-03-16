@@ -61,6 +61,7 @@ opts = {
     -- window-local options (vim.wo)
     win_opts = {
         wrap = true,
+        linebreak = true,
     },
 }
 ```

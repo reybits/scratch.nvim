@@ -13,6 +13,7 @@ local defaults = {
     local_notes_file = ".scratch.md",
     win_opts = {
         wrap = true,
+        linebreak = true,
     },
 }
 
