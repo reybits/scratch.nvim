@@ -324,6 +324,11 @@ local function update_windows()
     local cfg = make_window_config()
     vim.api.nvim_win_set_config(state.winnr, cfg.cfg_wnd)
 
+    -- Main window
+    for opt, val in pairs(config.win_opts) do
+        vim.wo[state.winnr][opt] = val
+    end
+
     update_footer()
     if state.foonr and vim.api.nvim_win_is_valid(state.foonr) then
         vim.api.nvim_win_set_config(state.foonr, cfg.cfg_foo)
