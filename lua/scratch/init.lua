@@ -24,6 +24,7 @@ local config = vim.tbl_deep_extend("force", {}, defaults)
 --- Internal state
 ---@class scratch.State
 ---@field buffers table<string, number|nil>
+---@field cursors table<string, number[]|nil>
 ---@field winnr number|nil
 ---@field foonr number|nil
 ---@field foo_bufnr number|nil
@@ -32,6 +33,7 @@ local config = vim.tbl_deep_extend("force", {}, defaults)
 ---@field project_root string|nil
 local state = {
     buffers = {},
+    cursors = {},
     winnr = nil,
     foonr = nil,
     foo_bufnr = nil,
@@ -325,6 +327,31 @@ local function apply_win_opts(winnr)
     end
 end
 
+--- Save the current cursor position for a note type.
+--- In-memory only; not persisted across Neovim sessions.
+---@param winnr number|nil
+---@param type string
+local function save_cursor(winnr, type)
+    if not winnr or not vim.api.nvim_win_is_valid(winnr) then
+        return
+    end
+    state.cursors[type] = vim.api.nvim_win_get_cursor(winnr)
+end
+
+--- Restore a previously saved cursor position, clamped to the current buffer.
+---@param winnr number
+---@param type string
+local function restore_cursor(winnr, type)
+    local pos = state.cursors[type]
+    if pos == nil then
+        return
+    end
+    local bufnr = vim.api.nvim_win_get_buf(winnr)
+    local last = vim.api.nvim_buf_line_count(bufnr)
+    local row = math.min(pos[1], last > 0 and last or 1)
+    pcall(vim.api.nvim_win_set_cursor, winnr, { row, pos[2] })
+end
+
 --- Update window title and footer after a type switch or resize
 local function update_windows()
     if not state.winnr or not vim.api.nvim_win_is_valid(state.winnr) then
@@ -352,6 +379,7 @@ local function open_window()
     -- Main window
     state.winnr = vim.api.nvim_open_win(bufnr, true, cfg.cfg_wnd)
     apply_win_opts(state.winnr)
+    restore_cursor(state.winnr, state.current_type)
 
     -- Footer window
     update_footer()
@@ -409,6 +437,7 @@ local function cycle_type(offset)
 
     -- Save current before switching
     save_current()
+    save_cursor(state.winnr, state.current_type)
 
     -- Find current index
     local current_idx = 1
@@ -433,6 +462,7 @@ local function cycle_type(offset)
 
     -- Reload from disk to pick up changes from other sessions
     reload_current()
+    restore_cursor(state.winnr, state.current_type)
 
     -- Re-register BufLeave for the new buffer
     vim.api.nvim_clear_autocmds({ group = augroup, event = "BufLeave" })
@@ -474,6 +504,7 @@ M.close = function()
     state.closing = true
 
     save_current()
+    save_cursor(state.winnr, state.current_type)
 
     pcall(vim.api.nvim_win_close, state.winnr, true)
     state.winnr = nil
@@ -492,6 +523,7 @@ M.reset = function()
     if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
         vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {})
     end
+    state.cursors[state.current_type] = nil
 end
 
 --- Switch to the next note type
