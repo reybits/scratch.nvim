@@ -315,6 +315,16 @@ end
 
 -- ── Window update helper ────────────────────────────────────────────
 
+--- Apply user's window-local options to a window.
+--- Needed after every nvim_win_set_config / nvim_open_win because
+--- style = "minimal" resets window-local options to defaults.
+---@param winnr number
+local function apply_win_opts(winnr)
+    for opt, val in pairs(config.win_opts) do
+        vim.wo[winnr][opt] = val
+    end
+end
+
 --- Update window title and footer after a type switch or resize
 local function update_windows()
     if not state.winnr or not vim.api.nvim_win_is_valid(state.winnr) then
@@ -323,11 +333,7 @@ local function update_windows()
 
     local cfg = make_window_config()
     vim.api.nvim_win_set_config(state.winnr, cfg.cfg_wnd)
-
-    -- Main window
-    for opt, val in pairs(config.win_opts) do
-        vim.wo[state.winnr][opt] = val
-    end
+    apply_win_opts(state.winnr)
 
     update_footer()
     if state.foonr and vim.api.nvim_win_is_valid(state.foonr) then
@@ -345,9 +351,7 @@ local function open_window()
 
     -- Main window
     state.winnr = vim.api.nvim_open_win(bufnr, true, cfg.cfg_wnd)
-    for opt, val in pairs(config.win_opts) do
-        vim.wo[state.winnr][opt] = val
-    end
+    apply_win_opts(state.winnr)
 
     -- Footer window
     update_footer()
