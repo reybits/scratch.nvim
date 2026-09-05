@@ -15,6 +15,8 @@ and global (shared across projects, saved to disk). Switch between them with
 - **Global notes** — persisted across projects (`stdpath("data")/scratch.nvim/global.md`).
 - Cycle between note types with `Tab` / `S-Tab`.
 - Notes auto-save on close, type switch, and `VimLeavePre`.
+- An empty note keeps no file on disk: the file appears once the note has
+  content and is removed when the note is cleared.
 - Configurable window size, border, title, and behavior.
 
 ## Installation

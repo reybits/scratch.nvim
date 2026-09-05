@@ -85,6 +85,18 @@ local function load_file(bufnr, path)
     end
 end
 
+--- Check whether the note holds nothing but blank lines
+---@param lines string[]
+---@return boolean
+local function is_blank(lines)
+    for _, line in ipairs(lines) do
+        if not line:match("^%s*$") then
+            return false
+        end
+    end
+    return true
+end
+
 --- Save buffer contents to a file
 ---@param bufnr number
 ---@param path string
@@ -92,11 +104,18 @@ local function save_file(bufnr, path)
     if not vim.api.nvim_buf_is_valid(bufnr) then
         return
     end
+    local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+    -- An empty note leaves no file behind; a cleared one takes its file with it
+    if is_blank(lines) then
+        if vim.fn.filereadable(path) == 1 then
+            vim.fn.delete(path)
+        end
+        return
+    end
     local dir = vim.fn.fnamemodify(path, ":h")
     if vim.fn.isdirectory(dir) == 0 then
         vim.fn.mkdir(dir, "p")
     end
-    local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
     vim.fn.writefile(lines, path)
 end
 
