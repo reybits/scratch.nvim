@@ -1,3 +1,5 @@
+local paths = require("scratch.paths")
+
 local M = {}
 
 --- Default configuration
@@ -30,7 +32,6 @@ local config = vim.tbl_deep_extend("force", {}, defaults)
 ---@field foo_bufnr number|nil
 ---@field current_type string
 ---@field closing boolean
----@field project_root string|nil
 local state = {
     buffers = {},
     cursors = {},
@@ -40,27 +41,11 @@ local state = {
     current_type = "temp",
     closing = false,
     switching = false,
-    project_root = nil,
 }
 
 local augroup = vim.api.nvim_create_augroup("scratch.nvim", { clear = true })
 
 -- ── Persistence helpers ─────────────────────────────────────────────
-
---- Find the project root (git root or cwd)
----@return string
-local function find_project_root()
-    if state.project_root then
-        return state.project_root
-    end
-    local result = vim.fn.systemlist("git rev-parse --show-toplevel 2>/dev/null")
-    if vim.v.shell_error == 0 and result[1] then
-        state.project_root = result[1]
-    else
-        state.project_root = vim.fn.getcwd()
-    end
-    return state.project_root
-end
 
 --- Get the file path for a note type
 ---@param type string
@@ -69,9 +54,9 @@ local function note_path(type)
     if type == "temp" then
         return nil
     elseif type == "local" then
-        return find_project_root() .. "/" .. config.local_notes_file
+        return paths.root() .. "/" .. config.local_notes_file
     elseif type == "global" then
-        return vim.fn.stdpath("data") .. "/scratch.nvim/global.md"
+        return paths.data_dir() .. "/global.md"
     end
 end
 
