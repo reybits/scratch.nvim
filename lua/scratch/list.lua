@@ -67,6 +67,13 @@ local state = {
     line_map = {},
 }
 
+local namespace = vim.api.nvim_create_namespace("scratch.nvim/list")
+
+--- Highlight group of the column header, so it does not read as another row.
+--- Defined on every repaint because :colorscheme clears it, and marked default
+--- so a user definition wins.
+local header_group = "ScratchIssuesHeader"
+
 local indent = "  "
 
 --- Cut a line down to the window width.
@@ -168,6 +175,13 @@ function M.refresh()
     vim.bo[bufnr].modifiable = true
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
     vim.bo[bufnr].modifiable = false
+
+    vim.api.nvim_set_hl(0, header_group, { bold = true, default = true })
+    vim.api.nvim_buf_clear_namespace(bufnr, namespace, 0, -1)
+    vim.api.nvim_buf_set_extmark(bufnr, namespace, 0, 0, {
+        end_col = #lines[1],
+        hl_group = header_group,
+    })
 end
 
 --- Open the issue under the cursor as an ordinary file buffer, so writing,

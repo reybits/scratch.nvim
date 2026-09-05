@@ -180,8 +180,16 @@ closed ones. Sorting and filtering are properties of the view and never
 rewrite the files.
 
 ```text
+    Type     Priority  Created     Description
     BUG      HIGH      2026-09-06  Parser drops the last line of a file
   x TASK     NORMAL    2026-09-05  Update the build image
+```
+
+The column header uses the `ScratchIssuesHeader` group, bold by default.
+Redefine it to taste, for example:
+
+```lua
+vim.api.nvim_set_hl(0, "ScratchIssuesHeader", { link = "Title" })
 ```
 
 Changing a field repaints only its own row: the filter is applied when the
