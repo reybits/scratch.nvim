@@ -1,4 +1,6 @@
 local paths = require("scratch.paths")
+local issue = require("scratch.issue")
+local list = require("scratch.list")
 
 local M = {}
 
@@ -31,6 +33,7 @@ local config = vim.tbl_deep_extend("force", {}, defaults)
 ---@field foonr number|nil
 ---@field foo_bufnr number|nil
 ---@field current_type string
+---@field prev_winnr number|nil: window the scratch window was opened from
 ---@field closing boolean
 local state = {
     buffers = {},
@@ -39,6 +42,7 @@ local state = {
     foonr = nil,
     foo_bufnr = nil,
     current_type = "temp",
+    prev_winnr = nil,
     closing = false,
 }
 
@@ -166,9 +170,37 @@ end
 
 -- ── Title & footer builders ─────────────────────────────────────────
 
+--- What the window is showing. Derived from the buffer itself, so the chrome
+--- can never disagree with what is on screen, and a buffer that belongs to
+--- nobody is recognised as such.
+---@param bufnr number
+---@return string: "note", "list", "issue" or "foreign"
+local function buffer_kind(bufnr)
+    if list.is_buffer(bufnr) then
+        return "list"
+    end
+    for _, note in pairs(state.buffers) do
+        if note == bufnr then
+            return "note"
+        end
+    end
+    if issue.is_issue(vim.api.nvim_buf_get_name(bufnr)) then
+        return "issue"
+    end
+    return "foreign"
+end
+
 --- Build the window title string
+---@param bufnr number
 ---@return string
-local function build_title()
+local function build_title(bufnr)
+    local kind = buffer_kind(bufnr)
+    if kind == "list" then
+        return " " .. config.title .. " [Issues: " .. type_label(list.scope()) .. "] "
+    elseif kind == "issue" then
+        return " " .. config.title .. " [Issue] "
+    end
+
     local types = enabled_types()
     if #types == 1 then
         return " " .. config.title .. " "
@@ -177,12 +209,20 @@ local function build_title()
 end
 
 --- Build the footer text string
+---@param bufnr number
 ---@return string
-local function build_footer_text()
+local function build_footer_text(bufnr)
+    local kind = buffer_kind(bufnr)
+    if kind == "list" then
+        return table.concat({ "'q' close", "'CR' open", "'S-Tab' switch scope" }, "  |  ")
+    elseif kind == "issue" then
+        return table.concat({ "'C-o' back", "':w' save" }, "  |  ")
+    end
+
     local types = enabled_types()
     local parts = { "'q' close", "'R' reset" }
     if #types > 1 then
-        table.insert(parts, "'Tab'/'S-Tab' switch note")
+        table.insert(parts, "'S-Tab' switch note")
     end
     return table.concat(parts, "  |  ")
 end
@@ -194,8 +234,9 @@ end
 ---@field cfg_foo vim.api.keyset.win_config
 
 --- Build main and footer window configurations
+---@param bufnr number: buffer the window will show
 ---@return scratch.WinConfig
-local function make_window_config()
+local function make_window_config(bufnr)
     local width, height
 
     if config.width > 0 and config.width <= 1 then
@@ -214,8 +255,8 @@ local function make_window_config()
     local row = math.floor((available_lines - height) / 2)
     local col = math.floor((vim.o.columns - width) / 2)
 
-    local title = build_title()
-    local footer_text = build_footer_text()
+    local title = build_title(bufnr)
+    local footer_text = build_footer_text(bufnr)
 
     local cfg_wnd = {
         relative = "editor",
@@ -284,14 +325,11 @@ local function get_or_create_buffer(type)
         M.reset()
     end, { buffer = bufnr, noremap = true, silent = true })
 
+    -- Tab is the same keycode as C-i, so mapping it would eat the jumplist
     local types = enabled_types()
     if #types > 1 then
-        vim.keymap.set("n", "<Tab>", function()
-            M.next_type()
-        end, { buffer = bufnr, noremap = true, silent = true })
-
         vim.keymap.set("n", "<S-Tab>", function()
-            M.prev_type()
+            M.next_type()
         end, { buffer = bufnr, noremap = true, silent = true })
     end
 
@@ -312,10 +350,11 @@ local function get_or_create_footer_buf()
 end
 
 --- Update footer buffer contents
-local function update_footer()
-    local bufnr = get_or_create_footer_buf()
-    local text = build_footer_text()
-    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { " " .. text })
+---@param bufnr number: buffer the main window is showing
+local function update_footer(bufnr)
+    local foo_bufnr = get_or_create_footer_buf()
+    local text = build_footer_text(bufnr)
+    vim.api.nvim_buf_set_lines(foo_bufnr, 0, -1, false, { " " .. text })
 end
 
 -- ── Window update helper ────────────────────────────────────────────
@@ -355,17 +394,18 @@ local function restore_cursor(winnr, type)
     pcall(vim.api.nvim_win_set_cursor, winnr, { row, pos[2] })
 end
 
---- Update window title and footer after a type switch or resize
+--- Update window title and footer after a buffer swap, type switch or resize
 local function update_windows()
     if not state.winnr or not vim.api.nvim_win_is_valid(state.winnr) then
         return
     end
 
-    local cfg = make_window_config()
+    local bufnr = vim.api.nvim_win_get_buf(state.winnr)
+    local cfg = make_window_config(bufnr)
     vim.api.nvim_win_set_config(state.winnr, cfg.cfg_wnd)
     apply_win_opts(state.winnr)
 
-    update_footer()
+    update_footer(bufnr)
     if state.foonr and vim.api.nvim_win_is_valid(state.foonr) then
         vim.api.nvim_win_set_config(state.foonr, cfg.cfg_foo)
     end
@@ -373,19 +413,77 @@ end
 
 -- ── Window management ───────────────────────────────────────────────
 
---- Open the scratch floating window
-local function open_window()
+--- Buffer of the current note type, loaded from disk
+---@return number bufnr
+local function note_buffer()
     local bufnr = get_or_create_buffer(state.current_type)
     reload_current()
-    local cfg = make_window_config()
+    return bufnr
+end
+
+--- Persist whatever the window is showing. A foreign buffer is never written:
+--- it is not ours to save.
+local function save_shown()
+    if state.winnr == nil or not vim.api.nvim_win_is_valid(state.winnr) then
+        return
+    end
+
+    local bufnr = vim.api.nvim_win_get_buf(state.winnr)
+    local kind = buffer_kind(bufnr)
+    if kind == "note" then
+        save_current()
+        save_cursor(state.winnr, state.current_type)
+    elseif kind == "issue" and vim.bo[bufnr].modified then
+        vim.api.nvim_buf_call(bufnr, function()
+            vim.cmd("silent write")
+        end)
+    end
+end
+
+--- A jump can drag any file into the floating window (C-o, gF, gd), leaving
+--- the user stuck in a window whose keymaps do not apply. Hand the buffer to
+--- a normal window instead and let the scratch window go.
+---@param bufnr number
+local function evacuate(bufnr)
+    local target = state.prev_winnr
+    if
+        target == nil
+        or not vim.api.nvim_win_is_valid(target)
+        or vim.api.nvim_win_get_config(target).relative ~= ""
+    then
+        target = nil
+        for _, winnr in ipairs(vim.api.nvim_list_wins()) do
+            if winnr ~= state.winnr and vim.api.nvim_win_get_config(winnr).relative == "" then
+                target = winnr
+                break
+            end
+        end
+    end
+
+    if target == nil then
+        return
+    end
+
+    M.close()
+    vim.api.nvim_set_current_win(target)
+    vim.api.nvim_win_set_buf(target, bufnr)
+end
+
+--- Open the scratch floating window
+---@param bufnr number: buffer to show
+local function open_window(bufnr)
+    local cfg = make_window_config(bufnr)
+    state.prev_winnr = vim.api.nvim_get_current_win()
 
     -- Main window
     state.winnr = vim.api.nvim_open_win(bufnr, true, cfg.cfg_wnd)
     apply_win_opts(state.winnr)
-    restore_cursor(state.winnr, state.current_type)
+    if buffer_kind(bufnr) == "note" then
+        restore_cursor(state.winnr, state.current_type)
+    end
 
     -- Footer window
-    update_footer()
+    update_footer(bufnr)
     local foo_bufnr = get_or_create_footer_buf()
     state.foonr = vim.api.nvim_open_win(foo_bufnr, false, cfg.cfg_foo)
 
@@ -403,7 +501,7 @@ local function open_window()
     })
 
     -- Leaving the window, not the buffer: swapping buffers inside the window
-    -- must not count as leaving
+    -- (type switch, opening an issue) must not count as leaving
     if config.close_on_leave then
         vim.api.nvim_create_autocmd("WinLeave", {
             group = augroup,
@@ -422,6 +520,70 @@ local function open_window()
             update_windows()
         end,
     })
+
+    -- Title and footer follow whatever buffer the window ends up showing,
+    -- including a jump back to the list with C-o. A buffer that is none of
+    -- ours does not belong here at all.
+    vim.api.nvim_create_autocmd("BufEnter", {
+        group = augroup,
+        callback = function()
+            if state.winnr == nil or vim.api.nvim_get_current_win() ~= state.winnr then
+                return
+            end
+
+            local shown = vim.api.nvim_get_current_buf()
+            if buffer_kind(shown) == "foreign" then
+                evacuate(shown)
+            else
+                update_windows()
+            end
+        end,
+    })
+end
+
+--- Show a buffer in the scratch window: open the window if it is closed, focus
+--- it if the focus is elsewhere, swap to the buffer if the window shows
+--- something else, and close if that kind is already in front.
+---@param kind string: "note" or "list"
+---@param get_buffer function: called only when a buffer is actually needed
+local function show(kind, get_buffer)
+    if state.winnr == nil or not vim.api.nvim_win_is_valid(state.winnr) then
+        open_window(get_buffer())
+        return
+    end
+
+    if buffer_kind(vim.api.nvim_win_get_buf(state.winnr)) == kind then
+        if state.winnr == vim.api.nvim_get_current_win() then
+            M.close()
+        else
+            vim.api.nvim_set_current_win(state.winnr)
+        end
+        return
+    end
+
+    save_shown()
+    vim.api.nvim_win_set_buf(state.winnr, get_buffer())
+    vim.api.nvim_set_current_win(state.winnr)
+    update_windows()
+end
+
+-- ── Issue helpers ───────────────────────────────────────────────────
+
+--- Show an issue file in the scratch window
+---@param path string
+local function open_issue(path)
+    if state.winnr and vim.api.nvim_win_is_valid(state.winnr) then
+        save_shown()
+        vim.api.nvim_set_current_win(state.winnr)
+    else
+        -- Open on the list, so C-o from the issue lands there
+        open_window(list.buffer())
+        list.refresh()
+    end
+
+    vim.cmd("edit " .. vim.fn.fnameescape(path))
+    vim.cmd("normal! G")
+    update_windows()
 end
 
 -- ── Public API ──────────────────────────────────────────────────────
@@ -468,18 +630,55 @@ local function cycle_type(offset)
     update_windows()
 end
 
---- Toggle the scratch window
+--- Toggle the note in the scratch window
 M.toggle = function()
+    show("note", note_buffer)
+end
+
+--- Toggle the issue list in the scratch window
+M.issues = function()
+    show("list", list.buffer)
     if state.winnr and vim.api.nvim_win_is_valid(state.winnr) then
-        if state.winnr == vim.api.nvim_get_current_win() then
-            M.close()
-        else
-            vim.api.nvim_set_current_win(state.winnr)
-        end
-        return
+        list.refresh()
+    end
+end
+
+--- Create an issue and open it. The line under the cursor seeds type and
+--- title when it is a todo comment, and its location goes into the body.
+---@param scope string: "local" or "global"
+---@param title string|nil
+M.task = function(scope, title)
+    local hint = issue.from_comment(vim.api.nvim_get_current_line())
+    local body = {}
+
+    local bufnr = vim.api.nvim_get_current_buf()
+    local name = vim.api.nvim_buf_get_name(bufnr)
+    if vim.bo[bufnr].buftype == "" and name ~= "" then
+        local file = vim.fn.fnamemodify(name, ":.")
+        table.insert(body, file .. ":" .. vim.api.nvim_win_get_cursor(0)[1])
     end
 
-    open_window()
+    local function create(text)
+        if text == nil or text == "" then
+            return
+        end
+        open_issue(issue.create(scope, {
+            type = hint and hint.type,
+            title = text,
+            body = body,
+        }))
+    end
+
+    if title and title ~= "" then
+        create(title)
+    else
+        vim.ui.input({ prompt = "Issue title: ", default = hint and hint.title or "" }, create)
+    end
+end
+
+--- Repaint the window chrome; the list calls this after changing scope
+M.update = function()
+    update_windows()
 end
 
 --- Close the scratch window
@@ -489,8 +688,7 @@ M.close = function()
     end
     state.closing = true
 
-    save_current()
-    save_cursor(state.winnr, state.current_type)
+    save_shown()
 
     pcall(vim.api.nvim_win_close, state.winnr, true)
     state.winnr = nil
@@ -529,6 +727,18 @@ function M.setup(opts)
     config = vim.tbl_deep_extend("force", {}, defaults, opts)
 
     vim.api.nvim_create_user_command("ScratchToggle", M.toggle, {})
+    vim.api.nvim_create_user_command("ScratchIssues", M.issues, {})
+
+    -- Bang targets the global scope; inside the list the visible scope wins
+    vim.api.nvim_create_user_command("ScratchTask", function(opts)
+        local scope = "local"
+        if opts.bang then
+            scope = "global"
+        elseif list.is_buffer(vim.api.nvim_get_current_buf()) then
+            scope = list.scope()
+        end
+        M.task(scope, opts.args)
+    end, { nargs = "?", bang = true })
 
     local setup_augroup = vim.api.nvim_create_augroup("scratch.nvim-setup", { clear = true })
 
@@ -537,6 +747,18 @@ function M.setup(opts)
         group = setup_augroup,
         callback = function()
             save_all()
+        end,
+    })
+
+    -- None of our buffers belong in the buffer list. Both :edit and a jumplist
+    -- move set 'buflisted' back to true, so this has to run on every display
+    -- rather than once at creation.
+    vim.api.nvim_create_autocmd("BufWinEnter", {
+        group = setup_augroup,
+        callback = function(args)
+            if buffer_kind(args.buf) ~= "foreign" then
+                vim.bo[args.buf].buflisted = false
+            end
         end,
     })
 
