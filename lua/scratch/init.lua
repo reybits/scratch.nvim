@@ -548,12 +548,31 @@ function M.setup(opts)
 
     vim.api.nvim_create_user_command("ScratchToggle", M.toggle, {})
 
+    local setup_augroup = vim.api.nvim_create_augroup("scratch.nvim-setup", { clear = true })
+
     -- Save all persistent notes on VimLeavePre
-    local leave_augroup = vim.api.nvim_create_augroup("scratch.nvim-leave", { clear = true })
     vim.api.nvim_create_autocmd("VimLeavePre", {
-        group = leave_augroup,
+        group = setup_augroup,
         callback = function()
             save_all()
+        end,
+    })
+
+    -- A new working directory means a new project: flush the note to the old
+    -- path before the root is re-resolved, or it would leak into the new one
+    vim.api.nvim_create_autocmd("DirChanged", {
+        group = setup_augroup,
+        callback = function()
+            local bufnr = state.buffers["local"]
+            if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+                save_file(bufnr, note_path("local"))
+                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {})
+                state.cursors["local"] = nil
+            end
+            paths.reset()
+            if state.current_type == "local" then
+                reload_current()
+            end
         end,
     })
 end
