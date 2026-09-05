@@ -122,6 +122,41 @@ function M.list(scope)
     return issues
 end
 
+--- Change one frontmatter field, leaving the body untouched. A file written
+--- by hand without frontmatter gets one.
+---@param path string
+---@param field string
+---@param value string
+function M.set(path, field, value)
+    local lines = vim.fn.readfile(path)
+    local entry = field .. ": " .. value
+
+    if lines[1] ~= "---" then
+        table.insert(lines, 1, "---")
+        table.insert(lines, 2, entry)
+        table.insert(lines, 3, "---")
+        table.insert(lines, 4, "")
+        vim.fn.writefile(lines, path)
+        return
+    end
+
+    local closing = nil
+    for i = 2, #lines do
+        if lines[i]:match("^" .. field .. ":") then
+            lines[i] = entry
+            vim.fn.writefile(lines, path)
+            return
+        end
+        if lines[i] == "---" then
+            closing = i
+            break
+        end
+    end
+
+    table.insert(lines, closing or 2, entry)
+    vim.fn.writefile(lines, path)
+end
+
 --- Write a new issue
 ---@param scope string
 ---@param fields table: type, priority, title, body

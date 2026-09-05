@@ -214,7 +214,12 @@ end
 local function build_footer_text(bufnr)
     local kind = buffer_kind(bufnr)
     if kind == "list" then
-        return table.concat({ "'q' close", "'CR' open", "'S-Tab' switch scope" }, "  |  ")
+        return table.concat({
+            "'q' close",
+            "'CR' open",
+            "'S-Tab' scope",
+            "'T'ype/'P'riority/'S'tatus",
+        }, "  |  ")
     elseif kind == "issue" then
         return table.concat({ "'C-o' back", "':w' save" }, "  |  ")
     end
@@ -232,6 +237,7 @@ end
 ---@class scratch.WinConfig
 ---@field cfg_wnd vim.api.keyset.win_config
 ---@field cfg_foo vim.api.keyset.win_config
+---@field footer_text string: already cut to the window width
 
 --- Build main and footer window configurations
 ---@param bufnr number: buffer the window will show
@@ -256,7 +262,14 @@ local function make_window_config(bufnr)
     local col = math.floor((vim.o.columns - width) / 2)
 
     local title = build_title(bufnr)
+
+    -- The footer window is sized by its text, so a long hint list would hang
+    -- off the screen on a narrow terminal. One column goes to the leading
+    -- space update_footer adds.
     local footer_text = build_footer_text(bufnr)
+    if #footer_text + 1 > width then
+        footer_text = footer_text:sub(1, width - 1)
+    end
 
     local cfg_wnd = {
         relative = "editor",
@@ -277,7 +290,7 @@ local function make_window_config(bufnr)
         zindex = 51,
         border = "none",
         focusable = false,
-        width = #footer_text + 2,
+        width = math.min(#footer_text + 2, width),
         height = 1,
         row = row + height + 1,
         col = col + math.floor((width - #footer_text) / 2),
@@ -286,6 +299,7 @@ local function make_window_config(bufnr)
     return {
         cfg_wnd = cfg_wnd,
         cfg_foo = cfg_foo,
+        footer_text = footer_text,
     }
 end
 
@@ -350,10 +364,9 @@ local function get_or_create_footer_buf()
 end
 
 --- Update footer buffer contents
----@param bufnr number: buffer the main window is showing
-local function update_footer(bufnr)
+---@param text string: as sized by make_window_config, so the two agree
+local function update_footer(text)
     local foo_bufnr = get_or_create_footer_buf()
-    local text = build_footer_text(bufnr)
     vim.api.nvim_buf_set_lines(foo_bufnr, 0, -1, false, { " " .. text })
 end
 
@@ -405,7 +418,7 @@ local function update_windows()
     vim.api.nvim_win_set_config(state.winnr, cfg.cfg_wnd)
     apply_win_opts(state.winnr)
 
-    update_footer(bufnr)
+    update_footer(cfg.footer_text)
     if state.foonr and vim.api.nvim_win_is_valid(state.foonr) then
         vim.api.nvim_win_set_config(state.foonr, cfg.cfg_foo)
     end
@@ -483,7 +496,7 @@ local function open_window(bufnr)
     end
 
     -- Footer window
-    update_footer(bufnr)
+    update_footer(cfg.footer_text)
     local foo_bufnr = get_or_create_footer_buf()
     state.foonr = vim.api.nvim_open_win(foo_bufnr, false, cfg.cfg_foo)
 

@@ -116,6 +116,9 @@ opts = {
 | `q`       | Close the scratch window      |
 | `CR`      | Open the issue under the cursor|
 | `S-Tab`   | Switch between local and global|
+| `T`       | Cycle type: bug, feature, task|
+| `P`       | Cycle priority: low, normal, high, critical|
+| `S`       | Toggle status: open, done     |
 
 `Tab` is deliberately left alone: it is the same keycode as `C-i`, and mapping
 it would break jumping forward through the jumplist.
@@ -167,11 +170,24 @@ Free-form markdown below the title.
 
 Only these fields and the first `#` heading are read; everything else in the
 file is left alone. Missing fields fall back to `task`, `normal` and `open`,
-so a file written by hand still shows up in the list. Change a field by
-editing the file and saving it; the list is re-read whenever it is entered.
+so a file written by hand still shows up in the list. Fields can be changed
+from the list with `T`, `P` and `S`, which rewrite that one frontmatter line
+and leave the rest of the file alone, or by editing the file by hand. The list
+is re-read whenever it is entered.
 
-The list shows open issues, newest first. Sorting and filtering are properties
-of the view and never rewrite the files.
+The list shows open issues, newest first, with a checkbox-style mark for
+closed ones. Sorting and filtering are properties of the view and never
+rewrite the files.
+
+```text
+    BUG      HIGH      2026-09-06  Parser drops the last line of a file
+  x TASK     NORMAL    2026-09-05  Update the build image
+```
+
+Changing a field repaints only its own row: the filter is applied when the
+list is built, not while you are working in it. So closing an issue leaves it
+in place, marked, and it disappears the next time the list is entered — the
+key never lands on a different issue than the one under the cursor.
 
 A path with a line number, like `src/parser.c:412`, is what `gF` already
 understands, so it doubles as a jump back into the code.
