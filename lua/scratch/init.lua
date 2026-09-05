@@ -40,7 +40,6 @@ local state = {
     foo_bufnr = nil,
     current_type = "temp",
     closing = false,
-    switching = false,
 }
 
 local augroup = vim.api.nvim_create_augroup("scratch.nvim", { clear = true })
@@ -403,13 +402,13 @@ local function open_window()
         end,
     })
 
-    -- BufLeave
+    -- Leaving the window, not the buffer: swapping buffers inside the window
+    -- must not count as leaving
     if config.close_on_leave then
-        vim.api.nvim_create_autocmd("BufLeave", {
+        vim.api.nvim_create_autocmd("WinLeave", {
             group = augroup,
-            buffer = bufnr,
             callback = function()
-                if not state.switching then
+                if state.winnr and vim.api.nvim_get_current_win() == state.winnr then
                     M.close()
                 end
             end,
@@ -459,28 +458,11 @@ local function cycle_type(offset)
     -- Get or create the buffer for the new type
     local bufnr = get_or_create_buffer(state.current_type)
 
-    -- Swap buffer in window (guard against BufLeave firing during swap)
-    state.switching = true
     vim.api.nvim_win_set_buf(state.winnr, bufnr)
-    state.switching = false
 
     -- Reload from disk to pick up changes from other sessions
     reload_current()
     restore_cursor(state.winnr, state.current_type)
-
-    -- Re-register BufLeave for the new buffer
-    vim.api.nvim_clear_autocmds({ group = augroup, event = "BufLeave" })
-    if config.close_on_leave then
-        vim.api.nvim_create_autocmd("BufLeave", {
-            group = augroup,
-            buffer = bufnr,
-            callback = function()
-                if not state.switching then
-                    M.close()
-                end
-            end,
-        })
-    end
 
     -- Update title and footer
     update_windows()
