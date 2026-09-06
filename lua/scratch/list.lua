@@ -65,6 +65,7 @@ local state = {
     bufnr = nil,
     scope = "local",
     line_map = {},
+    cursors = {},
 }
 
 local namespace = vim.api.nvim_create_namespace("scratch.nvim/list")
@@ -117,10 +118,19 @@ local function row_cells(entry)
     return cells
 end
 
+--- Window showing the list, or -1 while it has none
+---@return number
+local function list_win()
+    if state.bufnr == nil then
+        return -1
+    end
+    return vim.fn.bufwinid(state.bufnr)
+end
+
 --- Width available to the list, or a sane default while it has no window
 ---@return number
 local function window_width()
-    local winnr = state.bufnr and vim.fn.bufwinid(state.bufnr) or -1
+    local winnr = list_win()
     if winnr == -1 then
         return 80
     end
@@ -246,8 +256,10 @@ local function cycle_field(field)
 end
 
 local function toggle_scope()
+    M.remember_cursor()
     state.scope = state.scope == "local" and "global" or "local"
     M.refresh()
+    M.restore_cursor()
     require("scratch").update()
 end
 
@@ -293,6 +305,27 @@ function M.buffer()
 
     state.bufnr = bufnr
     return bufnr
+end
+
+--- Remember where the cursor stands, per scope: each scope is its own list
+function M.remember_cursor()
+    local winnr = list_win()
+    if winnr ~= -1 then
+        state.cursors[state.scope] = vim.api.nvim_win_get_cursor(winnr)
+    end
+end
+
+--- Put the cursor back where this scope was left. With nothing remembered it
+--- lands on the first issue rather than the header, which no key acts on.
+function M.restore_cursor()
+    local winnr = list_win()
+    if winnr == -1 then
+        return
+    end
+
+    local pos = state.cursors[state.scope] or { 2, 0 }
+    local last = vim.api.nvim_buf_line_count(state.bufnr)
+    pcall(vim.api.nvim_win_set_cursor, winnr, { math.min(pos[1], last), pos[2] })
 end
 
 --- Scope the list is currently showing

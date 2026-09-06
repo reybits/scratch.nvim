@@ -446,6 +446,8 @@ local function save_shown()
     if kind == "note" then
         save_current()
         save_cursor(state.winnr, state.current_type)
+    elseif kind == "list" then
+        list.remember_cursor()
     elseif kind == "issue" and vim.bo[bufnr].modified then
         vim.api.nvim_buf_call(bufnr, function()
             vim.cmd("silent write")
@@ -653,6 +655,7 @@ M.issues = function()
     show("list", list.buffer)
     if state.winnr and vim.api.nvim_win_is_valid(state.winnr) then
         list.refresh()
+        list.restore_cursor()
     end
 end
 
