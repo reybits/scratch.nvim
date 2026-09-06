@@ -119,6 +119,7 @@ opts = {
 | `T`       | Cycle type: bug, feature, task|
 | `P`       | Cycle priority: low, normal, high, critical|
 | `S`       | Toggle status: open, done     |
+| `>` / `<` | Next / previous sort order    |
 
 `Tab` is deliberately left alone: it is the same keycode as `C-i`, and mapping
 it would break jumping forward through the jumplist.
@@ -178,6 +179,26 @@ is re-read whenever it is entered.
 The list shows open issues, newest first, with a checkbox-style mark for
 closed ones. Sorting and filtering are properties of the view and never
 rewrite the files.
+
+`>` and `<` walk the sort orders in the order the columns appear: `type` (bugs
+first), `priority` (critical first), `created`, `updated`, `title`. The order
+in effect is shown in the header itself, wrapped in the same angle brackets as
+the keys that move it:
+
+```text
+    Type     <Priority> Created     Description
+  x TASK     NORMAL     2026-09-05  Update the build image
+```
+
+The date column shows whichever date the list is ordered by, so `<Updated>`
+carries the last change and `<Created>` the creation time. Every order falls
+back to the creation date among equals, so rows keep a stable position instead
+of shuffling on each repaint, and the cursor follows its issue through the
+reordering rather than staying on the same row.
+
+`updated` is the file's mtime, which git does not preserve: in a fresh clone
+every file carries the time of the clone, and `checkout` stamps the files it
+touches. For issues kept out of version control it is exact.
 
 ```text
     Type     Priority  Created     Description

@@ -196,6 +196,7 @@ end
 local function build_title(bufnr)
     local kind = buffer_kind(bufnr)
     if kind == "list" then
+        -- The sort order is not repeated here: the list header marks it
         return " " .. config.title .. " [Issues: " .. type_label(list.scope()) .. "] "
     elseif kind == "issue" then
         return " " .. config.title .. " [Issue] "
@@ -219,6 +220,7 @@ local function build_footer_text(bufnr)
             "'CR' open",
             "'S-Tab' scope",
             "'T'ype/'P'riority/'S'tatus",
+            "'<'/'>' sort",
         }, "  |  ")
     elseif kind == "issue" then
         return table.concat({ "'C-o' back", "':w' save" }, "  |  ")

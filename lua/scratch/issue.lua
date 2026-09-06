@@ -19,6 +19,7 @@ local defaults = {
 ---@field priority string: low|normal|high|critical
 ---@field status string: open|done
 ---@field title string
+---@field updated number: file mtime, not a stored field
 
 --- todo-comments keywords mapped onto issue types, so a comment in the code
 --- can seed an issue. Keys follow that plugin's default keyword set.
@@ -82,6 +83,8 @@ function M.parse(path)
     issue.path = path
     issue.id = vim.fn.fnamemodify(path, ":t:r")
     issue.title = issue.id
+    -- Kept out of the frontmatter: the filesystem already tracks it
+    issue.updated = vim.fn.getftime(path)
 
     local lines = vim.fn.readfile(path, "", head_lines)
     local body_start = 1

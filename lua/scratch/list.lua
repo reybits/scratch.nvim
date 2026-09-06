@@ -15,8 +15,15 @@ local function cell_priority(entry)
     return entry.priority:upper()
 end
 
---- The file name starts with the creation date
-local function cell_created(entry)
+--- The date column shows whichever date the list is ordered by: the file name
+--- starts with the creation date, and mtime carries the last change.
+---@param entry scratch.Issue
+---@param sort string
+---@return string
+local function cell_date(entry, sort)
+    if sort == "updated" and entry.updated and entry.updated > 0 then
+        return os.date("%Y-%m-%d", entry.updated)
+    end
     return entry.id:sub(1, 10)
 end
 
@@ -26,12 +33,20 @@ end
 
 --- Columns are data, so changing what a cell looks like stays a one-liner.
 --- A width of 0 means "take whatever is left".
+--- `sorts` maps the orders a column stands for onto the name it takes while
+--- that order is in effect. The active header is wrapped in angle brackets,
+--- which name the keys that move the order; widths leave room for them.
 local columns = {
     { header = " ", width = 2, format = cell_status },
-    { header = "Type", width = 9, format = cell_type },
-    { header = "Priority", width = 10, format = cell_priority },
-    { header = "Created", width = 12, format = cell_created },
-    { header = "Description", width = 0, format = cell_title },
+    { header = "Type", width = 9, format = cell_type, sorts = { type = "Type" } },
+    { header = "Priority", width = 11, format = cell_priority, sorts = { priority = "Priority" } },
+    {
+        header = "Created",
+        width = 12,
+        format = cell_date,
+        sorts = { created = "Created", updated = "Updated" },
+    },
+    { header = "Description", width = 0, format = cell_title, sorts = { title = "Description" } },
 }
 
 --- Values a field cycles through, in order
@@ -41,11 +56,65 @@ local cycles = {
     status = { "open", "done" },
 }
 
-local sorters = {
-    created_desc = function(a, b)
+local priority_rank = { critical = 1, high = 2, normal = 3, low = 4 }
+local type_rank = { bug = 1, feature = 2, task = 3 }
+
+--- Order by a ranked field, newest first among equals
+---@param field string
+---@param ranks table<string, number>
+---@return function
+local function by_rank(field, ranks)
+    return function(a, b)
+        local left = ranks[a[field]] or math.huge
+        local right = ranks[b[field]] or math.huge
+        if left ~= right then
+            return left < right
+        end
         return a.id > b.id
-    end,
+    end
+end
+
+--- Sort orders, cycled with < and >. Every one falls back to the creation
+--- date, because table.sort is not stable and equal rows would otherwise
+--- swap places on each repaint.
+local function by_created(a, b)
+    return a.id > b.id
+end
+
+local function by_updated(a, b)
+    if a.updated ~= b.updated then
+        return a.updated > b.updated
+    end
+    return a.id > b.id
+end
+
+local function by_title(a, b)
+    if a.title ~= b.title then
+        return a.title < b.title
+    end
+    return a.id > b.id
+end
+
+--- In the order the columns appear, so < and > walk the header left to right
+local sorters = {
+    { name = "type", compare = by_rank("type", type_rank) },
+    { name = "priority", compare = by_rank("priority", priority_rank) },
+    { name = "created", compare = by_created },
+    { name = "updated", compare = by_updated },
+    { name = "title", compare = by_title },
 }
+
+--- Look a sorter up by name, falling back to the first one
+---@param name string
+---@return table
+local function sorter(name)
+    for _, entry in ipairs(sorters) do
+        if entry.name == name then
+            return entry
+        end
+    end
+    return sorters[1]
+end
 
 local filters = {
     open = function(entry)
@@ -56,8 +125,10 @@ local filters = {
 --- How the store is presented. Sorting and filtering live here and never
 --- touch the files.
 ---@class scratch.View
+---@field sort string: name of a sorter
+---@field filter string|nil
 local view = {
-    sort = "created_desc",
+    sort = "created",
     filter = "open",
 }
 
@@ -109,11 +180,12 @@ end
 
 --- Pre-format one entry into cells, one per column
 ---@param entry scratch.Issue
+---@param sort string
 ---@return string[]
-local function row_cells(entry)
+local function row_cells(entry, sort)
     local cells = {}
     for i, column in ipairs(columns) do
-        cells[i] = column.format(entry)
+        cells[i] = column.format(entry, sort)
     end
     return cells
 end
@@ -150,18 +222,19 @@ function M.render(entries, opts, width)
             table.insert(shown, entry)
         end
     end
-    table.sort(shown, sorters[opts.sort])
+    table.sort(shown, sorter(opts.sort).compare)
 
     local headers = {}
     for i, column in ipairs(columns) do
-        headers[i] = column.header
+        local active = column.sorts and column.sorts[opts.sort]
+        headers[i] = active and ("<" .. active .. ">") or column.header
     end
 
     local lines = { format_row(headers, width) }
     local line_map = {}
 
     for _, entry in ipairs(shown) do
-        table.insert(lines, format_row(row_cells(entry), width))
+        table.insert(lines, format_row(row_cells(entry, opts.sort), width))
         line_map[#lines] = entry
     end
 
@@ -221,7 +294,7 @@ end
 ---@param row number
 ---@param entry scratch.Issue
 local function repaint_row(row, entry)
-    local line = format_row(row_cells(entry), window_width())
+    local line = format_row(row_cells(entry, view.sort), window_width())
     vim.bo[state.bufnr].modifiable = true
     vim.api.nvim_buf_set_lines(state.bufnr, row - 1, row, false, { line })
     vim.bo[state.bufnr].modifiable = false
@@ -253,6 +326,35 @@ local function cycle_field(field)
     -- into its place. The filter applies when the list is next built.
     entry[field] = values[next_index]
     repaint_row(row, entry)
+end
+
+--- Move to the next or previous sort order, keeping the cursor on the same
+--- issue rather than the same row: the rows have just been reshuffled
+---@param offset number: 1 for next, -1 for previous
+local function cycle_sort(offset)
+    local entry = state.line_map[vim.api.nvim_win_get_cursor(0)[1]]
+
+    local index = 1
+    for i, candidate in ipairs(sorters) do
+        if candidate.name == view.sort then
+            index = i
+            break
+        end
+    end
+    view.sort = sorters[(index - 1 + offset) % #sorters + 1].name
+
+    M.refresh()
+
+    if entry then
+        for row, shown in pairs(state.line_map) do
+            if shown.path == entry.path then
+                pcall(vim.api.nvim_win_set_cursor, list_win(), { row, 0 })
+                break
+            end
+        end
+    end
+
+    require("scratch").update()
 end
 
 local function toggle_scope()
@@ -294,6 +396,12 @@ function M.buffer()
         end, { buffer = bufnr, noremap = true, silent = true })
     end
 
+    for key, offset in pairs({ [">"] = 1, ["<"] = -1 }) do
+        vim.keymap.set("n", key, function()
+            cycle_sort(offset)
+        end, { buffer = bufnr, noremap = true, silent = true })
+    end
+
     -- Coming back from an issue must show what was just edited
     vim.api.nvim_create_autocmd("BufEnter", {
         group = vim.api.nvim_create_augroup("scratch.nvim-list", { clear = true }),
@@ -332,6 +440,12 @@ end
 ---@return string
 function M.scope()
     return state.scope
+end
+
+--- Name of the sort order in effect
+---@return string
+function M.sort()
+    return view.sort
 end
 
 --- Whether the buffer is the list itself
