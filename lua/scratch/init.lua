@@ -18,6 +18,7 @@ local defaults = {
     win_opts = {
         wrap = true,
         linebreak = true,
+        cursorline = true,
     },
 }
 

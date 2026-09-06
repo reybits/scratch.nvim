@@ -118,6 +118,7 @@ opts = {
     win_opts = {
         wrap = true,
         linebreak = true,
+        cursorline = true,
     },
 }
 ```
@@ -125,13 +126,16 @@ opts = {
 Set `local_notes = false` or `global_notes = false` to disable a note type.
 When only one type is enabled, the type label and switch keymaps are hidden.
 
-`win_opts` accepts any `vim.wo` option. For example:
+`win_opts` accepts any `vim.wo` option and applies to every buffer the window
+shows, the issue list included, which is why `cursorline` is on by default —
+a list is hard to read without the current row standing out. For example:
 
 ```lua
 opts = {
     win_opts = {
         wrap = true,
         linebreak = true,
+        cursorline = true,
         number = true,
     },
 }
