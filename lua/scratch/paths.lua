@@ -1,3 +1,15 @@
+-------------------------------------------------------------------------------
+-- scratch.nvim - Floating scratch notes and lightweight issue tracking.
+--
+-- Author: Andrey Ugolnik
+-- License: MIT
+-- GitHub: https://github.com/reybits/scratch.nvim
+--
+-- Where things live. A scope keeps its note and its issues in one directory,
+-- so both paths come from scope_dir() and differ only by suffix. The project
+-- root is cached and dropped when the working directory changes.
+-------------------------------------------------------------------------------
+
 local M = {}
 
 --- Cached project root; dropped when the working directory changes

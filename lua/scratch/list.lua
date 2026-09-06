@@ -1,3 +1,18 @@
+-------------------------------------------------------------------------------
+-- scratch.nvim - Floating scratch notes and lightweight issue tracking.
+--
+-- Author: Andrey Ugolnik
+-- License: MIT
+-- GitHub: https://github.com/reybits/scratch.nvim
+--
+-- The issue list. render() is pure: sorting, filtering and columns are data
+-- in the view, so the presentation changes without touching a single file.
+-- Every sort order falls back to the creation date, because table.sort is not
+-- stable and tied rows would otherwise swap places on each repaint.
+--
+-- Knows nothing about files: entries come from the store.
+-------------------------------------------------------------------------------
+
 local issue = require("scratch.issue")
 
 local M = {}

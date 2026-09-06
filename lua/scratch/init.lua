@@ -1,3 +1,22 @@
+-------------------------------------------------------------------------------
+-- scratch.nvim - Floating scratch notes and lightweight issue tracking.
+--
+-- Author: Andrey Ugolnik
+-- License: MIT
+-- GitHub: https://github.com/reybits/scratch.nvim
+--
+-- Owns the floating window and its companion footer. The window shows one of
+-- four kinds of buffer - a note, the issue list, an issue file, or something
+-- that belongs to nobody - and buffer_kind() derives which from the buffer
+-- itself, so the title and footer cannot disagree with what is on screen. A
+-- foreign buffer is handed to a normal window instead of being left inside
+-- the float.
+--
+-- Every buffer of ours carries a name (scratch://...). That is load-bearing:
+-- :edit reuses an empty, nameless buffer instead of creating one, and any
+-- plugin opening in the current window inherits that behaviour.
+-------------------------------------------------------------------------------
+
 local paths = require("scratch.paths")
 local issue = require("scratch.issue")
 local list = require("scratch.list")

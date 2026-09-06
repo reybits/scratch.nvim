@@ -1,3 +1,19 @@
+-------------------------------------------------------------------------------
+-- scratch.nvim - Floating scratch notes and lightweight issue tracking.
+--
+-- Author: Andrey Ugolnik
+-- License: MIT
+-- GitHub: https://github.com/reybits/scratch.nvim
+--
+-- The issue store: one markdown file per issue, named after its creation
+-- time, so the store needs no counter and a directory listing is already in
+-- chronological order. Only the frontmatter and the first heading are read;
+-- the rest of the file is none of its business, and a file written by hand
+-- without frontmatter still shows up.
+--
+-- Knows nothing about buffers or windows.
+-------------------------------------------------------------------------------
+
 local paths = require("scratch.paths")
 
 local M = {}
