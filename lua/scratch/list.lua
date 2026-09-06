@@ -274,7 +274,7 @@ local function open_entry()
     if entry == nil then
         return
     end
-    vim.cmd("edit " .. vim.fn.fnameescape(entry.path))
+    require("scratch").open_issue(entry.path)
 end
 
 --- Re-read the file's buffer after the store changed it on disk. An edit of
@@ -372,7 +372,10 @@ function M.buffer()
         return state.bufnr
     end
 
-    local bufnr = vim.api.nvim_create_buf(false, true)
+    -- Named so that :edit, and plugins that open in the current window, create
+    -- their own buffer instead of taking this one over
+    local bufnr = vim.fn.bufadd("scratch://issues")
+    vim.fn.bufload(bufnr)
 
     vim.bo[bufnr].buftype = "nofile"
     vim.bo[bufnr].filetype = "scratchissues"

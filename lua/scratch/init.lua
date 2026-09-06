@@ -117,7 +117,9 @@ local function save_current()
     end
 end
 
---- Save all persistent note types to disk
+--- Save all persistent note types to disk, plus any issue edited in a buffer
+--- that is no longer on screen: those are real files, and an unwritten one
+--- would otherwise block quitting.
 local function save_all()
     for type, bufnr in pairs(state.buffers) do
         if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
@@ -125,6 +127,15 @@ local function save_all()
             if path then
                 save_file(bufnr, path)
             end
+        end
+    end
+
+    for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+        local name = vim.api.nvim_buf_get_name(bufnr)
+        if vim.bo[bufnr].modified and issue.is_issue(name) then
+            vim.api.nvim_buf_call(bufnr, function()
+                vim.cmd("silent write")
+            end)
         end
     end
 end
@@ -222,7 +233,7 @@ local function build_footer_text(bufnr)
             "'<'/'>' sort",
         }, "  |  ")
     elseif kind == "issue" then
-        return table.concat({ "'C-o' back", "':w' save" }, "  |  ")
+        return table.concat({ "'C-o' back", "saved on close" }, "  |  ")
     end
 
     local types = enabled_types()
@@ -315,7 +326,14 @@ local function get_or_create_buffer(type)
         return bufnr
     end
 
-    bufnr = vim.api.nvim_create_buf(false, true)
+    -- A name keeps the buffer from being reused: :edit takes over an empty,
+    -- nameless buffer instead of creating one, and plugins that open in the
+    -- current window inherit that — oil.nvim on `-` would turn the note into
+    -- a directory listing. bufadd rather than nvim_create_buf, because it
+    -- returns the buffer that already carries the name if an older one
+    -- survived a plugin reload, where set_name would fail with E95.
+    bufnr = vim.fn.bufadd("scratch://note/" .. type)
+    vim.fn.bufload(bufnr)
 
     vim.bo[bufnr].buftype = "nofile"
     vim.bo[bufnr].filetype = "markdown"
@@ -585,9 +603,14 @@ end
 
 -- ── Issue helpers ───────────────────────────────────────────────────
 
---- Show an issue file in the scratch window
+--- Show an issue file in the scratch window.
+---
+--- Deliberately not :edit. That command reuses the current buffer when it is
+--- empty and unmodified — exactly what a note looks like once its entries
+--- have been moved out — and the note buffer would silently turn into the
+--- file while still being registered as a note.
 ---@param path string
-local function open_issue(path)
+M.open_issue = function(path)
     if state.winnr and vim.api.nvim_win_is_valid(state.winnr) then
         save_shown()
         vim.api.nvim_set_current_win(state.winnr)
@@ -597,8 +620,7 @@ local function open_issue(path)
         list.refresh()
     end
 
-    vim.cmd("edit " .. vim.fn.fnameescape(path))
-    vim.cmd("normal! G")
+    vim.api.nvim_win_set_buf(state.winnr, vim.fn.bufadd(path))
     update_windows()
 end
 
@@ -679,11 +701,17 @@ M.task = function(scope, title)
         if text == nil or text == "" then
             return
         end
-        open_issue(issue.create(scope, {
+        M.open_issue(issue.create(scope, {
             type = hint and hint.type,
             title = text,
             body = body,
         }))
+
+        -- Start at the end, where the body is written. Not `normal! G`: that
+        -- is a jump, and its jumplist entry would make the first C-o land in
+        -- this very buffer instead of going back.
+        local bufnr = vim.api.nvim_get_current_buf()
+        pcall(vim.api.nvim_win_set_cursor, 0, { vim.api.nvim_buf_line_count(bufnr), 0 })
     end
 
     if title and title ~= "" then
@@ -760,8 +788,11 @@ function M.setup(opts)
 
     local setup_augroup = vim.api.nvim_create_augroup("scratch.nvim-setup", { clear = true })
 
-    -- Save all persistent notes on VimLeavePre
-    vim.api.nvim_create_autocmd("VimLeavePre", {
+    -- Both events on purpose. ExitPre runs before Neovim decides whether an
+    -- unwritten buffer cancels the quit, so it is the one that keeps an issue
+    -- edited and left behind from blocking :qa. VimLeavePre, which the manual
+    -- calls the event "for really exiting", stays as the guarantee.
+    vim.api.nvim_create_autocmd({ "ExitPre", "VimLeavePre" }, {
         group = setup_augroup,
         callback = function()
             save_all()

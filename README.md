@@ -177,9 +177,12 @@ opts = {
 `Tab` is deliberately left alone: it is the same keycode as `C-i`, and mapping
 it would break jumping forward through the jumplist.
 
-An issue opens as an ordinary file buffer, so `:w`, undo and `C-o`/`C-i`
-between the list and the issue behave as they do anywhere else. Issue buffers
-are kept out of the buffer list, like the note buffers.
+An issue opens as an ordinary file buffer, so undo and `C-o`/`C-i` between the
+list, the issue and the note behave as they do anywhere else. Issue buffers are
+kept out of the buffer list, like the note buffers, and are saved the same way
+notes are: when the window closes, when it swaps to something else, and when
+nvim quits. Writing one by hand with `:w` does no harm, it is simply not
+needed.
 
 A jump can also land on a file that has nothing to do with notes or issues
 (`gF` from an issue into the code, `C-o` further back, `gd`). Such a file is
