@@ -14,7 +14,7 @@ local defaults = {
     local_notes = true,
     global_notes = true,
     close_on_leave = true,
-    local_notes_file = ".scratch.md",
+    local_dir = ".scratch",
     win_opts = {
         wrap = true,
         linebreak = true,
@@ -50,17 +50,15 @@ local augroup = vim.api.nvim_create_augroup("scratch.nvim", { clear = true })
 
 -- ── Persistence helpers ─────────────────────────────────────────────
 
---- Get the file path for a note type
+--- Get the file path for a note type. A scope keeps its note beside its
+--- issues, so both areas have the same shape.
 ---@param type string
 ---@return string|nil
 local function note_path(type)
     if type == "temp" then
         return nil
-    elseif type == "local" then
-        return paths.root() .. "/" .. config.local_notes_file
-    elseif type == "global" then
-        return paths.data_dir() .. "/global.md"
     end
+    return paths.scope_dir(type) .. "/note.md"
 end
 
 --- Load file contents into a buffer
@@ -743,6 +741,7 @@ end
 function M.setup(opts)
     opts = opts or {}
     config = vim.tbl_deep_extend("force", {}, defaults, opts)
+    paths.setup(config)
 
     vim.api.nvim_create_user_command("ScratchToggle", M.toggle, {})
     vim.api.nvim_create_user_command("ScratchIssues", M.issues, {})

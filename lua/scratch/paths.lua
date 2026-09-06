@@ -26,8 +26,26 @@ end
 
 --- Directory holding the plugin's own data
 ---@return string
-function M.data_dir()
+local function data_dir()
     return vim.fn.stdpath("data") .. "/scratch.nvim"
+end
+
+--- Name of the per-project directory; set from the config during setup
+local local_dir = ".scratch"
+
+---@param cfg scratch.Config
+function M.setup(cfg)
+    local_dir = cfg.local_dir
+end
+
+--- Directory holding everything of one scope: its note and its issues
+---@param scope string: "local" or "global"
+---@return string
+function M.scope_dir(scope)
+    if scope == "global" then
+        return data_dir()
+    end
+    return M.root() .. "/" .. local_dir
 end
 
 return M

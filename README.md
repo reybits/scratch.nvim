@@ -21,8 +21,8 @@ and a closed issue keeps a checkbox-style mark.*
 
 - Floating scratch window with markdown and Treesitter highlighting.
 - **Temporary notes** — in-memory, never written to disk.
-- **Local notes** — persisted per-project (`.scratch.md` at the git root).
-- **Global notes** — persisted across projects (`stdpath("data")/scratch.nvim/global.md`).
+- **Local notes** — persisted per-project (`.scratch/note.md` at the git root).
+- **Global notes** — persisted across projects (`stdpath("data")/scratch.nvim/note.md`).
 - Cycle between note types with `S-Tab`.
 - Notes auto-save on close, type switch, and `VimLeavePre`.
 - An empty note keeps no file on disk: the file appears once the note has
@@ -34,6 +34,40 @@ and a closed issue keeps a checkbox-style mark.*
 - Nothing of the plugin's own ends up in the buffer list, and a file that
   belongs to neither notes nor issues is never left inside the window.
 - Configurable window size, border, title, and behavior.
+
+## Breaking changes
+
+### 0.2.0 — one directory per scope
+
+A note and the issues of the same scope now live side by side, so each scope
+is a single directory instead of a file next to a directory:
+
+| | before | after |
+|---|---|---|
+| local note | `<git root>/.scratch.md` | `<git root>/.scratch/note.md` |
+| local issues | `<git root>/.scratch/issues/` | unchanged |
+| global note | `stdpath("data")/scratch.nvim/global.md` | `stdpath("data")/scratch.nvim/note.md` |
+| global issues | `stdpath("data")/scratch.nvim/issues/` | unchanged |
+
+`local_notes_file` is gone; `local_dir` names the per-project directory
+instead, and it holds both the note and the issues.
+
+**Move your notes once.** The plugin does not do it for you: it simply looks
+in the new place, and an old file is left where it is.
+
+```bash
+# in each project that has one
+mkdir -p .scratch && mv .scratch.md .scratch/note.md
+
+# once, for the global note
+cd "${XDG_DATA_HOME:-$HOME/.local/share}/nvim/scratch.nvim" && mv global.md note.md
+```
+
+One line covers everything in `.gitignore` now:
+
+```gitignore
+/.scratch/
+```
 
 ## Installation
 
@@ -74,8 +108,8 @@ opts = {
     -- enable global notes
     global_notes = true,
 
-    -- filename for local notes
-    local_notes_file = ".scratch.md",
+    -- per-project directory holding the note and the issues
+    local_dir = ".scratch",
 
     -- close the window when the focus leaves it
     close_on_leave = true,
@@ -161,10 +195,10 @@ the scratch window closes.
 
 ## Issues
 
-Every issue is one markdown file. Local issues live in `.scratch/issues/` at
-the git root, global ones in `stdpath("data")/scratch.nvim/issues/`. The file
-name is the creation time, so the store needs no counter and the directory
-sorts chronologically on its own.
+Every issue is one markdown file, kept beside the note of the same scope:
+`.scratch/issues/` at the git root, or `stdpath("data")/scratch.nvim/issues/`
+for the global scope. The file name is the creation time, so the store needs
+no counter and the directory sorts chronologically on its own.
 
 ```markdown
 ---

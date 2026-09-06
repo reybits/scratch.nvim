@@ -58,10 +58,7 @@ end
 ---@param scope string: "local" or "global"
 ---@return string
 function M.dir(scope)
-    if scope == "global" then
-        return paths.data_dir() .. "/issues"
-    end
-    return paths.root() .. "/.scratch/issues"
+    return paths.scope_dir(scope) .. "/issues"
 end
 
 --- Whether a path is one of our issue files
