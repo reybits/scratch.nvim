@@ -8,7 +8,14 @@ and global (shared across projects, saved to disk). Switch between them with
 Alongside free-form notes it keeps lightweight issues: plain markdown files
 with a few metadata fields, shown as a sortable list in the same window.
 
-![scratch.nvim](https://github.com/user-attachments/assets/a409f547-12ec-4d5b-b395-b4de8d51fae9)
+![A note in the scratch window](.github/screenshots/notes.png)
+
+*A temporary note. The footer names the keys the current buffer answers to.*
+
+![The issue list](.github/screenshots/issues.png)
+
+*The issue list, ordered by priority. The active order marks its own column,
+and a closed issue keeps a checkbox-style mark.*
 
 ## Features
 
@@ -22,6 +29,10 @@ with a few metadata fields, shown as a sortable list in the same window.
   content and is removed when the note is cleared.
 - **Issues** — one markdown file per issue, local to a project or global,
   listed in the same window and opened as ordinary file buffers.
+- Type, priority and status are changed straight from the list; the list is
+  ordered by any of its columns.
+- Nothing of the plugin's own ends up in the buffer list, and a file that
+  belongs to neither notes nor issues is never left inside the window.
 - Configurable window size, border, title, and behavior.
 
 ## Installation
@@ -34,9 +45,13 @@ with a few metadata fields, shown as a sortable list in the same window.
     lazy = true,
     keys = {
         { "<leader>ts", "<cmd>ScratchToggle<cr>", desc = "Toggle Scratch Buffer" },
+        { "<leader>ti", "<cmd>ScratchIssues<cr>", desc = "Toggle Scratch Issues" },
+        { "<leader>tt", "<cmd>ScratchTask<cr>", desc = "New Scratch Task" },
     },
     cmd = {
         "ScratchToggle",
+        "ScratchIssues",
+        "ScratchTask",
     },
     opts = {},
 }
@@ -62,7 +77,7 @@ opts = {
     -- filename for local notes
     local_notes_file = ".scratch.md",
 
-    -- close window when leaving the buffer
+    -- close the window when the focus leaves it
     close_on_leave = true,
 
     -- window-local options (vim.wo)
@@ -173,12 +188,17 @@ Only these fields and the first `#` heading are read; everything else in the
 file is left alone. Missing fields fall back to `task`, `normal` and `open`,
 so a file written by hand still shows up in the list. Fields can be changed
 from the list with `T`, `P` and `S`, which rewrite that one frontmatter line
-and leave the rest of the file alone, or by editing the file by hand. The list
-is re-read whenever it is entered.
+and leave the rest of the file alone, or by editing the file by hand.
+
+Such a change repaints only its own row. The filter is applied when the list
+is built, not while you are working in it, so closing an issue leaves it in
+place with its mark, and it disappears the next time the list is entered — a
+key never lands on a different issue than the one under the cursor.
 
 The list shows open issues, newest first, with a checkbox-style mark for
 closed ones. Sorting and filtering are properties of the view and never
-rewrite the files.
+rewrite the files. The cursor position is remembered separately for each
+scope, so reopening the list puts you back where you were.
 
 `>` and `<` walk the sort orders in the order the columns appear: `type` (bugs
 first), `priority` (critical first), `created`, `updated`, `title`. The order
@@ -200,23 +220,12 @@ reordering rather than staying on the same row.
 every file carries the time of the clone, and `checkout` stamps the files it
 touches. For issues kept out of version control it is exact.
 
-```text
-    Type     Priority  Created     Description
-    BUG      HIGH      2026-09-06  Parser drops the last line of a file
-  x TASK     NORMAL    2026-09-05  Update the build image
-```
-
 The column header uses the `ScratchIssuesHeader` group, bold by default.
 Redefine it to taste, for example:
 
 ```lua
 vim.api.nvim_set_hl(0, "ScratchIssuesHeader", { link = "Title" })
 ```
-
-Changing a field repaints only its own row: the filter is applied when the
-list is built, not while you are working in it. So closing an issue leaves it
-in place, marked, and it disappears the next time the list is entered — the
-key never lands on a different issue than the one under the cursor.
 
 A path with a line number, like `src/parser.c:412`, is what `gF` already
 understands, so it doubles as a jump back into the code.
