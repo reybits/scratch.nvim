@@ -5,21 +5,21 @@
 -- License: MIT
 -- GitHub: https://github.com/reybits/scratch.nvim
 --
--- Owns the floating window and its companion footer. The window shows one of
--- four kinds of buffer - a note, the issue list, an issue file, or something
--- that belongs to nobody - and buffer_kind() derives which from the buffer
--- itself, so the title and footer cannot disagree with what is on screen. A
--- foreign buffer is handed to a normal window instead of being left inside
--- the float.
+-- Configuration, the note buffers and the commands. The window lives in
+-- window.lua and asks this module, through describe(), what a buffer should
+-- be called and where its cursor belongs - so the dependencies point one way
+-- only: init -> list -> window, and everyone -> buffers.
 --
--- Every buffer of ours carries a name (scratch://...). That is load-bearing:
--- :edit reuses an empty, nameless buffer instead of creating one, and any
--- plugin opening in the current window inherits that behaviour.
+-- Persistence has a single rule: a buffer is written when it stops being
+-- visible. Where it goes is a property of the buffer, kept in the registry,
+-- never of a "currently selected" field.
 -------------------------------------------------------------------------------
 
 local paths = require("scratch.paths")
+local buffers = require("scratch.buffers")
 local issue = require("scratch.issue")
 local list = require("scratch.list")
+local window = require("scratch.window")
 
 local M = {}
 
@@ -45,30 +45,12 @@ local defaults = {
 ---@type scratch.Config
 local config = vim.tbl_deep_extend("force", {}, defaults)
 
---- Internal state
----@class scratch.State
----@field buffers table<string, number|nil>
----@field cursors table<string, number[]|nil>
----@field winnr number|nil
----@field foonr number|nil
----@field foo_bufnr number|nil
----@field current_type string
----@field prev_winnr number|nil: window the scratch window was opened from
----@field closing boolean
-local state = {
-    buffers = {},
-    cursors = {},
-    winnr = nil,
-    foonr = nil,
-    foo_bufnr = nil,
-    current_type = "temp",
-    prev_winnr = nil,
-    closing = false,
-}
+--- Which note to open with. Follows the buffer as soon as one is on screen;
+--- it is a memory of the last note seen, never the answer to "which note is
+--- this".
+local current_type = "temp"
 
-local augroup = vim.api.nvim_create_augroup("scratch.nvim", { clear = true })
-
--- ── Persistence helpers ─────────────────────────────────────────────
+-- ── Notes on disk ───────────────────────────────────────────────────
 
 --- Get the file path for a note type. A scope keeps its note beside its
 --- issues, so both areas have the same shape.
@@ -86,8 +68,7 @@ end
 ---@param path string
 local function load_file(bufnr, path)
     if vim.fn.filereadable(path) == 1 then
-        local lines = vim.fn.readfile(path)
-        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, vim.fn.readfile(path))
     end
 end
 
@@ -110,6 +91,7 @@ local function save_file(bufnr, path)
     if not vim.api.nvim_buf_is_valid(bufnr) then
         return
     end
+
     local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
     -- An empty note leaves no file behind; a cleared one takes its file with it
     if is_blank(lines) then
@@ -118,6 +100,7 @@ local function save_file(bufnr, path)
         end
         return
     end
+
     local dir = vim.fn.fnamemodify(path, ":h")
     if vim.fn.isdirectory(dir) == 0 then
         vim.fn.mkdir(dir, "p")
@@ -125,52 +108,50 @@ local function save_file(bufnr, path)
     vim.fn.writefile(lines, path)
 end
 
---- Save the current note type to disk (if applicable)
-local function save_current()
-    local bufnr = state.buffers[state.current_type]
-    if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
-        local path = note_path(state.current_type)
-        if path then
-            save_file(bufnr, path)
-        end
+--- Path a buffer is stored at, asked of the buffer rather than of any state
+---@param bufnr number
+---@return string|nil
+local function path_of(bufnr)
+    local info = buffers.get(bufnr)
+    if info == nil or info.kind ~= "note" then
+        return nil
+    end
+    return note_path(info.type)
+end
+
+--- Write a note buffer to the file of its own type
+---@param bufnr number
+local function save_note(bufnr)
+    local path = path_of(bufnr)
+    if path then
+        save_file(bufnr, path)
     end
 end
 
---- Save all persistent note types to disk, plus any issue edited in a buffer
---- that is no longer on screen: those are real files, and an unwritten one
---- would otherwise block quitting.
-local function save_all()
-    for type, bufnr in pairs(state.buffers) do
-        if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
-            local path = note_path(type)
-            if path then
-                save_file(bufnr, path)
-            end
-        end
+--- Re-read a note buffer from the file of its own type
+---@param bufnr number
+local function reload_note(bufnr)
+    local path = path_of(bufnr)
+    if path then
+        load_file(bufnr, path)
     end
+end
 
-    for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
-        local name = vim.api.nvim_buf_get_name(bufnr)
-        if vim.bo[bufnr].modified and issue.is_issue(name) then
+--- Write everything of ours, for the quit. Buffers are written when they stop
+--- being visible; the one still on screen never gets that chance, and a quit
+--- is refused before any window closes.
+local function save_all()
+    buffers.each("note", save_note)
+    buffers.each("issue", function(bufnr)
+        if vim.bo[bufnr].modified then
             vim.api.nvim_buf_call(bufnr, function()
                 vim.cmd("silent write")
             end)
         end
-    end
+    end)
 end
 
---- Reload the current note type from disk (if applicable)
-local function reload_current()
-    local bufnr = state.buffers[state.current_type]
-    if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
-        local path = note_path(state.current_type)
-        if path then
-            load_file(bufnr, path)
-        end
-    end
-end
-
--- ── Type helpers ────────────────────────────────────────────────────
+-- ── Note types ──────────────────────────────────────────────────────
 
 --- Get ordered list of enabled note types
 ---@return string[]
@@ -197,162 +178,79 @@ local function type_label(type)
     return labels[type] or type
 end
 
--- ── Title & footer builders ─────────────────────────────────────────
+-- ── What the window shows ───────────────────────────────────────────
 
---- What the window is showing. Derived from the buffer itself, so the chrome
---- can never disagree with what is on screen, and a buffer that belongs to
---- nobody is recognised as such.
+--- Everything the window needs about a buffer: how to name it, what to offer
+--- in the footer, and under which key its cursor belongs. Derived from the
+--- registry, so it always describes what is on screen.
 ---@param bufnr number
----@return string: "note", "list", "issue" or "foreign"
-local function buffer_kind(bufnr)
-    if list.is_buffer(bufnr) then
-        return "list"
-    end
-    for _, note in pairs(state.buffers) do
-        if note == bufnr then
-            return "note"
-        end
-    end
-    if issue.is_issue(vim.api.nvim_buf_get_name(bufnr)) then
-        return "issue"
-    end
-    return "foreign"
-end
+---@return scratch.Chrome
+local function describe(bufnr)
+    local info = buffers.get(bufnr)
+    local kind = info and info.kind or "foreign"
 
---- Build the window title string
----@param bufnr number
----@return string
-local function build_title(bufnr)
-    local kind = buffer_kind(bufnr)
     if kind == "list" then
-        -- The sort order is not repeated here: the list header marks it
-        return " " .. config.title .. " [Issues: " .. type_label(list.scope()) .. "] "
-    elseif kind == "issue" then
-        return " " .. config.title .. " [Issue] "
+        return {
+            kind = kind,
+            title = " " .. config.title .. " [Issues: " .. type_label(list.scope()) .. "] ",
+            footer = table.concat({
+                "'q' close",
+                "'CR' open",
+                "'S-Tab' scope",
+                "'T'ype/'P'riority/'S'tatus",
+                "'<'/'>' sort",
+            }, "  |  "),
+            cursor_key = "list/" .. list.scope(),
+        }
     end
 
-    local types = enabled_types()
-    if #types == 1 then
-        return " " .. config.title .. " "
-    end
-    return " " .. config.title .. " [" .. type_label(state.current_type) .. "] "
-end
-
---- Build the footer text string
----@param bufnr number
----@return string
-local function build_footer_text(bufnr)
-    local kind = buffer_kind(bufnr)
-    if kind == "list" then
-        return table.concat({
-            "'q' close",
-            "'CR' open",
-            "'S-Tab' scope",
-            "'T'ype/'P'riority/'S'tatus",
-            "'<'/'>' sort",
-        }, "  |  ")
-    elseif kind == "issue" then
-        return table.concat({ "'C-o' back", "saved on close" }, "  |  ")
+    if kind == "issue" then
+        return {
+            kind = kind,
+            title = " " .. config.title .. " [Issue] ",
+            footer = table.concat({ "'C-o' back", "saved on close" }, "  |  "),
+            -- a file buffer keeps its own position
+            cursor_key = nil,
+        }
     end
 
+    -- A foreign buffer is on its way out; it only needs a kind
+    local type = info and info.type or current_type
     local types = enabled_types()
     local parts = { "'q' close", "'R' reset" }
     if #types > 1 then
         table.insert(parts, "'S-Tab' switch note")
     end
-    return table.concat(parts, "  |  ")
-end
-
--- ── Window config builder ───────────────────────────────────────────
-
----@class scratch.WinConfig
----@field cfg_wnd vim.api.keyset.win_config
----@field cfg_foo vim.api.keyset.win_config
----@field footer_text string: already cut to the window width
-
---- Build main and footer window configurations
----@param bufnr number: buffer the window will show
----@return scratch.WinConfig
-local function make_window_config(bufnr)
-    local width, height
-
-    if config.width > 0 and config.width <= 1 then
-        width = math.floor(config.width * vim.o.columns)
-    else
-        width = math.floor(config.width)
-    end
-
-    local available_lines = vim.o.lines - vim.o.cmdheight - (vim.o.laststatus > 0 and 1 or 0)
-
-    if config.height > 0 and config.height <= 1 then
-        height = math.floor(config.height * available_lines)
-    else
-        height = math.floor(config.height)
-    end
-    local row = math.floor((available_lines - height) / 2)
-    local col = math.floor((vim.o.columns - width) / 2)
-
-    local title = build_title(bufnr)
-
-    -- The footer window is sized by its text, so a long hint list would hang
-    -- off the screen on a narrow terminal. One column goes to the leading
-    -- space update_footer adds.
-    local footer_text = build_footer_text(bufnr)
-    if #footer_text + 1 > width then
-        footer_text = footer_text:sub(1, width - 1)
-    end
-
-    local cfg_wnd = {
-        relative = "editor",
-        border = config.border,
-        style = "minimal",
-        zindex = 50,
-        title = title,
-        title_pos = "center",
-        width = width,
-        height = height,
-        row = row,
-        col = col,
-    }
-
-    local cfg_foo = {
-        relative = "editor",
-        style = "minimal",
-        zindex = 51,
-        border = "none",
-        focusable = false,
-        width = math.min(#footer_text + 2, width),
-        height = 1,
-        row = row + height + 1,
-        col = col + math.floor((width - #footer_text) / 2),
-    }
 
     return {
-        cfg_wnd = cfg_wnd,
-        cfg_foo = cfg_foo,
-        footer_text = footer_text,
+        kind = kind,
+        title = #types == 1 and (" " .. config.title .. " ")
+            or (" " .. config.title .. " [" .. type_label(type) .. "] "),
+        footer = table.concat(parts, "  |  "),
+        cursor_key = "note/" .. type,
     }
 end
 
--- ── Buffer creation ─────────────────────────────────────────────────
+-- ── Note buffers ────────────────────────────────────────────────────
 
---- Get or create a buffer for the given note type
+--- Get or create the buffer of a note type
 ---@param type string
 ---@return number bufnr
 local function get_or_create_buffer(type)
-    local bufnr = state.buffers[type]
-    if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+    local bufnr = buffers.find("note", type)
+    if bufnr then
         return bufnr
     end
 
     -- A name keeps the buffer from being reused: :edit takes over an empty,
     -- nameless buffer instead of creating one, and plugins that open in the
-    -- current window inherit that — oil.nvim on `-` would turn the note into
+    -- current window inherit that - oil.nvim on `-` would turn the note into
     -- a directory listing. bufadd rather than nvim_create_buf, because it
-    -- returns the buffer that already carries the name if an older one
-    -- survived a plugin reload, where set_name would fail with E95.
+    -- returns the buffer already carrying the name if an older one survived a
+    -- plugin reload, where set_name would fail with E95.
     bufnr = vim.fn.bufadd("scratch://note/" .. type)
     vim.fn.bufload(bufnr)
+    buffers.set(bufnr, { kind = "note", type = type })
 
     vim.bo[bufnr].buftype = "nofile"
     vim.bo[bufnr].filetype = "markdown"
@@ -362,293 +260,66 @@ local function get_or_create_buffer(type)
 
     vim.treesitter.start(bufnr, "markdown")
 
-    -- Load from disk if applicable
     local path = note_path(type)
     if path then
         load_file(bufnr, path)
     end
 
-    -- Set keymaps on the buffer
     vim.keymap.set("n", "q", function()
-        M.close()
+        window.close()
     end, { buffer = bufnr, noremap = true, silent = true })
 
-    vim.keymap.set("n", "R", function()
-        M.reset()
-    end, { buffer = bufnr, noremap = true, silent = true })
+    vim.keymap.set("n", "R", M.reset, { buffer = bufnr, noremap = true, silent = true })
 
     -- Tab is the same keycode as C-i, so mapping it would eat the jumplist
-    local types = enabled_types()
-    if #types > 1 then
-        vim.keymap.set("n", "<S-Tab>", function()
-            M.next_type()
-        end, { buffer = bufnr, noremap = true, silent = true })
+    if #enabled_types() > 1 then
+        vim.keymap.set(
+            "n",
+            "<S-Tab>",
+            M.next_type,
+            { buffer = bufnr, noremap = true, silent = true }
+        )
     end
 
-    state.buffers[type] = bufnr
     return bufnr
 end
 
--- ── Footer helpers ──────────────────────────────────────────────────
-
---- Get or create the footer buffer
----@return number bufnr
-local function get_or_create_footer_buf()
-    if state.foo_bufnr and vim.api.nvim_buf_is_valid(state.foo_bufnr) then
-        return state.foo_bufnr
-    end
-    state.foo_bufnr = vim.api.nvim_create_buf(false, true)
-    return state.foo_bufnr
-end
-
---- Update footer buffer contents
----@param text string: as sized by make_window_config, so the two agree
-local function update_footer(text)
-    local foo_bufnr = get_or_create_footer_buf()
-    vim.api.nvim_buf_set_lines(foo_bufnr, 0, -1, false, { " " .. text })
-end
-
--- ── Window update helper ────────────────────────────────────────────
-
---- Apply user's window-local options to a window.
---- Needed after every nvim_win_set_config / nvim_open_win because
---- style = "minimal" resets window-local options to defaults.
----@param winnr number
-local function apply_win_opts(winnr)
-    for opt, val in pairs(config.win_opts) do
-        vim.wo[winnr][opt] = val
-    end
-end
-
---- Save the current cursor position for a note type.
---- In-memory only; not persisted across Neovim sessions.
----@param winnr number|nil
----@param type string
-local function save_cursor(winnr, type)
-    if not winnr or not vim.api.nvim_win_is_valid(winnr) then
-        return
-    end
-    state.cursors[type] = vim.api.nvim_win_get_cursor(winnr)
-end
-
---- Restore a previously saved cursor position, clamped to the current buffer.
----@param winnr number
----@param type string
-local function restore_cursor(winnr, type)
-    local pos = state.cursors[type]
-    if pos == nil then
-        return
-    end
-    local bufnr = vim.api.nvim_win_get_buf(winnr)
-    local last = vim.api.nvim_buf_line_count(bufnr)
-    local row = math.min(pos[1], last > 0 and last or 1)
-    pcall(vim.api.nvim_win_set_cursor, winnr, { row, pos[2] })
-end
-
---- Update window title and footer after a buffer swap, type switch or resize
-local function update_windows()
-    if not state.winnr or not vim.api.nvim_win_is_valid(state.winnr) then
-        return
-    end
-
-    local bufnr = vim.api.nvim_win_get_buf(state.winnr)
-    local cfg = make_window_config(bufnr)
-    vim.api.nvim_win_set_config(state.winnr, cfg.cfg_wnd)
-    apply_win_opts(state.winnr)
-
-    update_footer(cfg.footer_text)
-    if state.foonr and vim.api.nvim_win_is_valid(state.foonr) then
-        vim.api.nvim_win_set_config(state.foonr, cfg.cfg_foo)
-    end
-end
-
--- ── Window management ───────────────────────────────────────────────
-
---- Buffer of the current note type, loaded from disk
+--- Buffer of the note to open with, refreshed from disk
 ---@return number bufnr
 local function note_buffer()
-    local bufnr = get_or_create_buffer(state.current_type)
-    reload_current()
+    local bufnr = get_or_create_buffer(current_type)
+    reload_note(bufnr)
     return bufnr
-end
-
---- Persist whatever the window is showing. A foreign buffer is never written:
---- it is not ours to save.
-local function save_shown()
-    if state.winnr == nil or not vim.api.nvim_win_is_valid(state.winnr) then
-        return
-    end
-
-    local bufnr = vim.api.nvim_win_get_buf(state.winnr)
-    local kind = buffer_kind(bufnr)
-    if kind == "note" then
-        save_current()
-        save_cursor(state.winnr, state.current_type)
-    elseif kind == "list" then
-        list.remember_cursor()
-    elseif kind == "issue" and vim.bo[bufnr].modified then
-        vim.api.nvim_buf_call(bufnr, function()
-            vim.cmd("silent write")
-        end)
-    end
-end
-
---- A jump can drag any file into the floating window (C-o, gF, gd), leaving
---- the user stuck in a window whose keymaps do not apply. Hand the buffer to
---- a normal window instead and let the scratch window go.
----@param bufnr number
-local function evacuate(bufnr)
-    local target = state.prev_winnr
-    if
-        target == nil
-        or not vim.api.nvim_win_is_valid(target)
-        or vim.api.nvim_win_get_config(target).relative ~= ""
-    then
-        target = nil
-        for _, winnr in ipairs(vim.api.nvim_list_wins()) do
-            if winnr ~= state.winnr and vim.api.nvim_win_get_config(winnr).relative == "" then
-                target = winnr
-                break
-            end
-        end
-    end
-
-    if target == nil then
-        return
-    end
-
-    M.close()
-    vim.api.nvim_set_current_win(target)
-    vim.api.nvim_win_set_buf(target, bufnr)
-end
-
---- Open the scratch floating window
----@param bufnr number: buffer to show
-local function open_window(bufnr)
-    local cfg = make_window_config(bufnr)
-    state.prev_winnr = vim.api.nvim_get_current_win()
-
-    -- Main window
-    state.winnr = vim.api.nvim_open_win(bufnr, true, cfg.cfg_wnd)
-    apply_win_opts(state.winnr)
-    if buffer_kind(bufnr) == "note" then
-        restore_cursor(state.winnr, state.current_type)
-    end
-
-    -- Footer window
-    update_footer(cfg.footer_text)
-    local foo_bufnr = get_or_create_footer_buf()
-    state.foonr = vim.api.nvim_open_win(foo_bufnr, false, cfg.cfg_foo)
-
-    -- Set up autocmds (clear previous ones)
-    vim.api.nvim_clear_autocmds({ group = augroup })
-
-    -- WinClosed for main window
-    vim.api.nvim_create_autocmd("WinClosed", {
-        group = augroup,
-        pattern = tostring(state.winnr),
-        once = true,
-        callback = function()
-            M.close()
-        end,
-    })
-
-    -- Leaving the window, not the buffer: swapping buffers inside the window
-    -- (type switch, opening an issue) must not count as leaving
-    if config.close_on_leave then
-        vim.api.nvim_create_autocmd("WinLeave", {
-            group = augroup,
-            callback = function()
-                if state.winnr and vim.api.nvim_get_current_win() == state.winnr then
-                    M.close()
-                end
-            end,
-        })
-    end
-
-    -- VimResized
-    vim.api.nvim_create_autocmd("VimResized", {
-        group = augroup,
-        callback = function()
-            update_windows()
-        end,
-    })
-
-    -- Title and footer follow whatever buffer the window ends up showing,
-    -- including a jump back to the list with C-o. A buffer that is none of
-    -- ours does not belong here at all.
-    vim.api.nvim_create_autocmd("BufEnter", {
-        group = augroup,
-        callback = function()
-            if state.winnr == nil or vim.api.nvim_get_current_win() ~= state.winnr then
-                return
-            end
-
-            local shown = vim.api.nvim_get_current_buf()
-            if buffer_kind(shown) == "foreign" then
-                evacuate(shown)
-            else
-                update_windows()
-            end
-        end,
-    })
-end
-
---- Show a buffer in the scratch window: open the window if it is closed, focus
---- it if the focus is elsewhere, swap to the buffer if the window shows
---- something else, and close if that kind is already in front.
----@param kind string: "note" or "list"
----@param get_buffer function: called only when a buffer is actually needed
-local function show(kind, get_buffer)
-    if state.winnr == nil or not vim.api.nvim_win_is_valid(state.winnr) then
-        open_window(get_buffer())
-        return
-    end
-
-    if buffer_kind(vim.api.nvim_win_get_buf(state.winnr)) == kind then
-        if state.winnr == vim.api.nvim_get_current_win() then
-            M.close()
-        else
-            vim.api.nvim_set_current_win(state.winnr)
-        end
-        return
-    end
-
-    save_shown()
-    vim.api.nvim_win_set_buf(state.winnr, get_buffer())
-    vim.api.nvim_set_current_win(state.winnr)
-    update_windows()
-end
-
--- ── Issue helpers ───────────────────────────────────────────────────
-
---- Show an issue file in the scratch window.
----
---- Deliberately not :edit. That command reuses the current buffer when it is
---- empty and unmodified — exactly what a note looks like once its entries
---- have been moved out — and the note buffer would silently turn into the
---- file while still being registered as a note.
----@param path string
-M.open_issue = function(path)
-    if state.winnr and vim.api.nvim_win_is_valid(state.winnr) then
-        save_shown()
-        vim.api.nvim_set_current_win(state.winnr)
-    else
-        -- Open on the list, so C-o from the issue lands there
-        open_window(list.buffer())
-        list.refresh()
-    end
-
-    vim.api.nvim_win_set_buf(state.winnr, vim.fn.bufadd(path))
-    update_windows()
 end
 
 -- ── Public API ──────────────────────────────────────────────────────
 
+--- Toggle the note in the scratch window
+M.toggle = function()
+    window.show("note", note_buffer)
+end
+
+--- Toggle the issue list in the scratch window
+M.issues = function()
+    window.show("list", list.buffer)
+    if window.is_open() then
+        list.refresh()
+        -- with nothing remembered, start on the first issue rather than the
+        -- header, which no key acts on
+        window.restore_cursor(2)
+    end
+end
+
+--- Show an issue file in the scratch window
+---@param path string
+M.open_issue = function(path)
+    list.open(path)
+end
+
 --- Cycle through note types
 ---@param offset number: 1 for next, -1 for previous
 local function cycle_type(offset)
-    if not state.winnr or not vim.api.nvim_win_is_valid(state.winnr) then
+    if not window.is_open() then
         return
     end
 
@@ -657,48 +328,57 @@ local function cycle_type(offset)
         return
     end
 
-    -- Save current before switching
-    save_current()
-    save_cursor(state.winnr, state.current_type)
+    -- Step away from the note on screen, whichever it is. Its contents are
+    -- written when the window swaps it out, so only the cursor is kept here.
+    window.remember_cursor()
 
-    -- Find current index
-    local current_idx = 1
-    for i, t in ipairs(types) do
-        if t == state.current_type then
-            current_idx = i
+    local shown = buffers.get(window.current_buf())
+    local from = shown and shown.type or current_type
+
+    local index = 1
+    for i, type in ipairs(types) do
+        if type == from then
+            index = i
             break
         end
     end
 
-    -- Compute next index (wrapping)
-    local next_idx = ((current_idx - 1 + offset) % #types) + 1
-    state.current_type = types[next_idx]
+    current_type = types[((index - 1 + offset) % #types) + 1]
 
-    -- Get or create the buffer for the new type
-    local bufnr = get_or_create_buffer(state.current_type)
-
-    vim.api.nvim_win_set_buf(state.winnr, bufnr)
+    local bufnr = get_or_create_buffer(current_type)
+    window.swap_to(bufnr)
 
     -- Reload from disk to pick up changes from other sessions
-    reload_current()
-    restore_cursor(state.winnr, state.current_type)
-
-    -- Update title and footer
-    update_windows()
+    reload_note(bufnr)
+    window.restore_cursor()
 end
 
---- Toggle the note in the scratch window
-M.toggle = function()
-    show("note", note_buffer)
+--- Switch to the next note type
+M.next_type = function()
+    cycle_type(1)
 end
 
---- Toggle the issue list in the scratch window
-M.issues = function()
-    show("list", list.buffer)
-    if state.winnr and vim.api.nvim_win_is_valid(state.winnr) then
-        list.refresh()
-        list.restore_cursor()
+--- Switch to the previous note type
+M.prev_type = function()
+    cycle_type(-1)
+end
+
+--- Clear the note on screen. Which one that is comes from the window, not
+--- from any remembered type: the two part ways as soon as the user jumps.
+M.reset = function()
+    local bufnr = window.current_buf()
+    local info = bufnr and buffers.get(bufnr)
+    if info == nil or info.kind ~= "note" then
+        return
     end
+
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {})
+    window.forget_cursor("note/" .. info.type)
+end
+
+--- Close the scratch window
+M.close = function()
+    window.close()
 end
 
 --- Create an issue and open it. The line under the cursor seeds type and
@@ -720,7 +400,8 @@ M.task = function(scope, title)
         if text == nil or text == "" then
             return
         end
-        M.open_issue(issue.create(scope, {
+
+        list.open(issue.create(scope, {
             type = hint and hint.type,
             title = text,
             body = body,
@@ -729,8 +410,8 @@ M.task = function(scope, title)
         -- Start at the end, where the body is written. Not `normal! G`: that
         -- is a jump, and its jumplist entry would make the first C-o land in
         -- this very buffer instead of going back.
-        local bufnr = vim.api.nvim_get_current_buf()
-        pcall(vim.api.nvim_win_set_cursor, 0, { vim.api.nvim_buf_line_count(bufnr), 0 })
+        local opened = vim.api.nvim_get_current_buf()
+        pcall(vim.api.nvim_win_set_cursor, 0, { vim.api.nvim_buf_line_count(opened), 0 })
     end
 
     if title and title ~= "" then
@@ -740,69 +421,25 @@ M.task = function(scope, title)
     end
 end
 
---- Repaint the window chrome; the list calls this after changing scope
-M.update = function()
-    update_windows()
-end
-
---- Close the scratch window
-M.close = function()
-    if state.closing then
-        return
-    end
-    state.closing = true
-
-    save_shown()
-
-    pcall(vim.api.nvim_win_close, state.winnr, true)
-    state.winnr = nil
-
-    pcall(vim.api.nvim_win_close, state.foonr, true)
-    state.foonr = nil
-
-    vim.api.nvim_clear_autocmds({ group = augroup })
-
-    state.closing = false
-end
-
---- Reset the current buffer content
-M.reset = function()
-    local bufnr = state.buffers[state.current_type]
-    if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
-        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {})
-    end
-    state.cursors[state.current_type] = nil
-end
-
---- Switch to the next note type
-M.next_type = function()
-    cycle_type(1)
-end
-
---- Switch to the previous note type
-M.prev_type = function()
-    cycle_type(-1)
-end
-
 --- Setup the plugin
 ---@param opts scratch.Config|nil
 function M.setup(opts)
-    opts = opts or {}
-    config = vim.tbl_deep_extend("force", {}, defaults, opts)
+    config = vim.tbl_deep_extend("force", {}, defaults, opts or {})
     paths.setup(config)
+    window.setup(config, describe)
 
     vim.api.nvim_create_user_command("ScratchToggle", M.toggle, {})
     vim.api.nvim_create_user_command("ScratchIssues", M.issues, {})
 
     -- Bang targets the global scope; inside the list the visible scope wins
-    vim.api.nvim_create_user_command("ScratchTask", function(opts)
+    vim.api.nvim_create_user_command("ScratchTask", function(args)
         local scope = "local"
-        if opts.bang then
+        if args.bang then
             scope = "global"
         elseif list.is_buffer(vim.api.nvim_get_current_buf()) then
             scope = list.scope()
         end
-        M.task(scope, opts.args)
+        M.task(scope, args.args)
     end, { nargs = "?", bang = true })
 
     local setup_augroup = vim.api.nvim_create_augroup("scratch.nvim-setup", { clear = true })
@@ -813,18 +450,47 @@ function M.setup(opts)
     -- calls the event "for really exiting", stays as the guarantee.
     vim.api.nvim_create_autocmd({ "ExitPre", "VimLeavePre" }, {
         group = setup_augroup,
-        callback = function()
-            save_all()
+        callback = save_all,
+    })
+
+    -- The one rule of persistence: a buffer is written when it stops being
+    -- visible - left by C-o, swapped out of the window, or closed with it.
+    vim.api.nvim_create_autocmd("BufWinLeave", {
+        group = setup_augroup,
+        callback = function(args)
+            local info = buffers.get(args.buf)
+            if info == nil then
+                return
+            end
+
+            if info.kind == "note" then
+                save_note(args.buf)
+            elseif info.kind == "issue" and vim.bo[args.buf].modified then
+                vim.api.nvim_buf_call(args.buf, function()
+                    vim.cmd("silent write")
+                end)
+            end
+        end,
+    })
+
+    vim.api.nvim_create_autocmd("BufEnter", {
+        group = setup_augroup,
+        callback = function(args)
+            local info = buffers.get(args.buf)
+            -- The note to open with is simply the last one seen
+            if info and info.kind == "note" then
+                current_type = info.type
+            end
         end,
     })
 
     -- None of our buffers belong in the buffer list. Both :edit and a jumplist
-    -- move set 'buflisted' back to true, so this has to run on every display
-    -- rather than once at creation.
+    -- move set 'buflisted' back to true, so this runs on every display rather
+    -- than once at creation.
     vim.api.nvim_create_autocmd("BufWinEnter", {
         group = setup_augroup,
         callback = function(args)
-            if buffer_kind(args.buf) ~= "foreign" then
+            if buffers.get(args.buf) then
                 vim.bo[args.buf].buflisted = false
             end
         end,
@@ -835,15 +501,17 @@ function M.setup(opts)
     vim.api.nvim_create_autocmd("DirChanged", {
         group = setup_augroup,
         callback = function()
-            local bufnr = state.buffers["local"]
-            if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+            local bufnr = buffers.find("note", "local")
+            if bufnr then
                 save_file(bufnr, note_path("local"))
                 vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {})
-                state.cursors["local"] = nil
+                window.forget_cursor("note/local")
             end
+
             paths.reset()
-            if state.current_type == "local" then
-                reload_current()
+
+            if bufnr and vim.fn.bufwinid(bufnr) ~= -1 then
+                reload_note(bufnr)
             end
         end,
     })

@@ -13,7 +13,9 @@
 -- Knows nothing about files: entries come from the store.
 -------------------------------------------------------------------------------
 
+local buffers = require("scratch.buffers")
 local issue = require("scratch.issue")
+local window = require("scratch.window")
 
 local M = {}
 
@@ -282,18 +284,41 @@ function M.refresh()
     })
 end
 
---- Open the issue under the cursor as an ordinary file buffer, so writing,
---- undo and <C-o> back to the list all work as they do anywhere else
+--- Show an issue as an ordinary file buffer, so writing, undo and C-o back
+--- to the list work as they do anywhere else.
+---
+--- Deliberately not :edit. That command reuses the current buffer when it is
+--- empty and unmodified - exactly what a note looks like once its entries
+--- have been moved out - and the note buffer would silently turn into the
+--- file while still being registered as a note.
+---@param path string
+function M.open(path)
+    if not window.is_open() then
+        -- open on the list, so C-o from the issue lands there
+        window.open(M.buffer())
+        M.refresh()
+    end
+
+    local bufnr = vim.fn.bufadd(path)
+    buffers.set(bufnr, { kind = "issue", path = path })
+    window.swap_to(bufnr)
+end
+
+--- Open the issue under the cursor
 local function open_entry()
     local entry = state.line_map[vim.api.nvim_win_get_cursor(0)[1]]
     if entry == nil then
         return
     end
-    require("scratch").open_issue(entry.path)
+    M.open(entry.path)
 end
 
---- Re-read the file's buffer after the store changed it on disk. An edit of
---- the user's own outranks ours, so a modified buffer is left alone.
+--- Re-read the file's buffer after the store changed it on disk.
+---
+--- An issue shown in the scratch window is written the moment it stops being
+--- visible, so by the time the list is reachable its buffer is clean. A copy
+--- open elsewhere is not covered by that rule and may still hold changes;
+--- re-reading it would fail, so it is left alone.
 ---@param path string
 local function reload_buffer(path)
     local bufnr = vim.fn.bufnr(path)
@@ -369,15 +394,17 @@ local function cycle_sort(offset)
         end
     end
 
-    require("scratch").update()
+    window.update()
 end
 
+--- Each scope is its own list, so the cursor is remembered per scope; the
+--- window keys it by the scope in effect when it is asked.
 local function toggle_scope()
-    M.remember_cursor()
+    window.remember_cursor()
     state.scope = state.scope == "local" and "global" or "local"
     M.refresh()
-    M.restore_cursor()
-    require("scratch").update()
+    window.restore_cursor(2)
+    window.update()
 end
 
 --- The list buffer, created on first use and repainted whenever it is entered
@@ -391,6 +418,7 @@ function M.buffer()
     -- their own buffer instead of taking this one over
     local bufnr = vim.fn.bufadd("scratch://issues")
     vim.fn.bufload(bufnr)
+    buffers.set(bufnr, { kind = "list" })
 
     vim.bo[bufnr].buftype = "nofile"
     vim.bo[bufnr].filetype = "scratchissues"
@@ -401,9 +429,7 @@ function M.buffer()
 
     vim.keymap.set("n", "<CR>", open_entry, { buffer = bufnr, noremap = true, silent = true })
 
-    vim.keymap.set("n", "q", function()
-        require("scratch").close()
-    end, { buffer = bufnr, noremap = true, silent = true })
+    vim.keymap.set("n", "q", window.close, { buffer = bufnr, noremap = true, silent = true })
 
     -- Tab is the same keycode as C-i: mapping it would eat the jump forward
     vim.keymap.set("n", "<S-Tab>", toggle_scope, { buffer = bufnr, noremap = true, silent = true })
@@ -431,27 +457,6 @@ function M.buffer()
 
     state.bufnr = bufnr
     return bufnr
-end
-
---- Remember where the cursor stands, per scope: each scope is its own list
-function M.remember_cursor()
-    local winnr = list_win()
-    if winnr ~= -1 then
-        state.cursors[state.scope] = vim.api.nvim_win_get_cursor(winnr)
-    end
-end
-
---- Put the cursor back where this scope was left. With nothing remembered it
---- lands on the first issue rather than the header, which no key acts on.
-function M.restore_cursor()
-    local winnr = list_win()
-    if winnr == -1 then
-        return
-    end
-
-    local pos = state.cursors[state.scope] or { 2, 0 }
-    local last = vim.api.nvim_buf_line_count(state.bufnr)
-    pcall(vim.api.nvim_win_set_cursor, winnr, { math.min(pos[1], last), pos[2] })
 end
 
 --- Scope the list is currently showing
