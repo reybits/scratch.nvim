@@ -48,6 +48,38 @@ local function cell_title(entry)
     return entry.title
 end
 
+--- One colour axis, and it is priority: type is already legible as a word,
+--- while HIGH and LOW read the same until they differ in colour. Everything
+--- unimportant is dimmed instead of coloured, so the eye has one thing to
+--- follow rather than two competing ones.
+local priority_group = {
+    critical = "ScratchIssueCritical",
+    high = "ScratchIssueHigh",
+    low = "ScratchIssueLow",
+}
+
+--- Groups the list defines, linked to whatever the colourscheme provides.
+--- Marked default, so a user definition wins, and redefined on every repaint
+--- because :colorscheme clears them.
+local highlight_links = {
+    ScratchIssueCritical = "DiagnosticError",
+    ScratchIssueHigh = "DiagnosticWarn",
+    ScratchIssueLow = "Comment",
+    ScratchIssueDate = "Comment",
+    ScratchIssueDone = "Comment",
+}
+
+---@param entry scratch.Issue
+---@return string|nil
+local function hl_priority(entry)
+    return priority_group[entry.priority]
+end
+
+---@return string
+local function hl_date()
+    return "ScratchIssueDate"
+end
+
 --- Columns are data, so changing what a cell looks like stays a one-liner.
 --- A width of 0 means "take whatever is left".
 --- `sorts` maps the orders a column stands for onto the name it takes while
@@ -56,11 +88,18 @@ end
 local columns = {
     { header = " ", width = 2, format = cell_status },
     { header = "Type", width = 9, format = cell_type, sorts = { type = "Type" } },
-    { header = "Priority", width = 11, format = cell_priority, sorts = { priority = "Priority" } },
+    {
+        header = "Priority",
+        width = 11,
+        format = cell_priority,
+        hl = hl_priority,
+        sorts = { priority = "Priority" },
+    },
     {
         header = "Created",
         width = 12,
         format = cell_date,
+        hl = hl_date,
         sorts = { created = "Created", updated = "Updated" },
     },
     { header = "Description", width = 0, format = cell_title, sorts = { title = "Description" } },
@@ -178,21 +217,69 @@ local function truncate(line, width)
     return vim.fn.strcharpart(line, 0, width)
 end
 
---- Join pre-formatted cells into one padded line
+--- Join pre-formatted cells into one padded line, and report where each cell
+--- landed so it can be highlighted without measuring the line again.
 ---@param cells string[]
 ---@param width number
----@return string
+---@return string line, table[] spans: byte range of each cell
 local function format_row(cells, width)
     local parts = {}
+    local spans = {}
+    local at = #indent
+
     for i, column in ipairs(columns) do
         local cell = cells[i] or ""
+        spans[i] = { from = at, to = at + #cell }
+
         if column.width > 0 then
             parts[i] = cell .. string.rep(" ", math.max(1, column.width - #cell))
         else
             parts[i] = cell
         end
+        at = at + #parts[i]
     end
-    return truncate(indent .. table.concat(parts), width)
+
+    return truncate(indent .. table.concat(parts), width), spans
+end
+
+--- Highlights of one row. A closed issue is dimmed as a whole instead of
+--- carrying per-column colour: it is done, and nothing in it is urgent.
+---@param entry scratch.Issue
+---@param spans table[]
+---@param line string
+---@param row number: zero-based
+---@return table[]
+local function row_marks(entry, spans, line, row)
+    if entry.status == "done" then
+        return { { row = row, from = 0, to = #line, group = "ScratchIssueDone" } }
+    end
+
+    local marks = {}
+    for i, column in ipairs(columns) do
+        local group = column.hl and column.hl(entry)
+        -- a narrow window can cut a cell off entirely
+        if group and spans[i].from < #line then
+            table.insert(marks, {
+                row = row,
+                from = spans[i].from,
+                to = math.min(spans[i].to, #line),
+                group = group,
+            })
+        end
+    end
+    return marks
+end
+
+--- Paint a set of marks into the buffer
+---@param bufnr number
+---@param marks table[]
+local function apply_marks(bufnr, marks)
+    for _, mark in ipairs(marks) do
+        vim.api.nvim_buf_set_extmark(bufnr, namespace, mark.row, mark.from, {
+            end_col = mark.to,
+            hl_group = mark.group,
+        })
+    end
 end
 
 --- Pre-format one entry into cells, one per column
@@ -247,19 +334,25 @@ function M.render(entries, opts, width)
         headers[i] = active and ("<" .. active .. ">") or column.header
     end
 
-    local lines = { format_row(headers, width) }
+    -- one value on purpose: format_row also returns spans, and a table
+    -- constructor would swallow them as a second line
+    local header_line = format_row(headers, width)
+    local lines = { header_line }
     local line_map = {}
+    local marks = {}
 
     for _, entry in ipairs(shown) do
-        table.insert(lines, format_row(row_cells(entry, opts.sort), width))
+        local line, spans = format_row(row_cells(entry, opts.sort), width)
+        table.insert(lines, line)
         line_map[#lines] = entry
+        vim.list_extend(marks, row_marks(entry, spans, line, #lines - 1))
     end
 
     if #shown == 0 then
         table.insert(lines, indent .. "No " .. opts.filter .. " issues")
     end
 
-    return lines, line_map
+    return lines, line_map, marks
 end
 
 --- Re-read the store and repaint the buffer
@@ -269,7 +362,7 @@ function M.refresh()
         return
     end
 
-    local lines, line_map = M.render(issue.list(state.scope), view, window_width())
+    local lines, line_map, marks = M.render(issue.list(state.scope), view, window_width())
     state.line_map = line_map
 
     vim.bo[bufnr].modifiable = true
@@ -277,11 +370,16 @@ function M.refresh()
     vim.bo[bufnr].modifiable = false
 
     vim.api.nvim_set_hl(0, header_group, { bold = true, default = true })
+    for group, link in pairs(highlight_links) do
+        vim.api.nvim_set_hl(0, group, { link = link, default = true })
+    end
+
     vim.api.nvim_buf_clear_namespace(bufnr, namespace, 0, -1)
     vim.api.nvim_buf_set_extmark(bufnr, namespace, 0, 0, {
         end_col = #lines[1],
         hl_group = header_group,
     })
+    apply_marks(bufnr, marks)
 end
 
 --- Show an issue as an ordinary file buffer, so writing, undo and C-o back
@@ -334,10 +432,15 @@ end
 ---@param row number
 ---@param entry scratch.Issue
 local function repaint_row(row, entry)
-    local line = format_row(row_cells(entry, view.sort), window_width())
+    local line, spans = format_row(row_cells(entry, view.sort), window_width())
+
     vim.bo[state.bufnr].modifiable = true
     vim.api.nvim_buf_set_lines(state.bufnr, row - 1, row, false, { line })
     vim.bo[state.bufnr].modifiable = false
+
+    -- the row may have just become a closed one, so its old marks go too
+    vim.api.nvim_buf_clear_namespace(state.bufnr, namespace, row - 1, row)
+    apply_marks(state.bufnr, row_marks(entry, spans, line, row - 1))
 end
 
 --- Move the field of the issue under the cursor to its next value

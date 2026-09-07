@@ -30,9 +30,11 @@ and a closed issue keeps a checkbox-style mark.*
 - **Issues** — one markdown file per issue, local to a project or global,
   listed in the same window and opened as ordinary file buffers.
 - Type, priority and status are changed straight from the list; the list is
-  ordered by any of its columns.
+  ordered by any of its columns, and priority is colour-coded.
 - Nothing of the plugin's own ends up in the buffer list, and a file that
   belongs to neither notes nor issues is never left inside the window.
+- Notes and issues are written whenever they leave the screen, so nothing is
+  lost by jumping away or closing the window.
 - Configurable window size, border, title, and behavior.
 
 ## Breaking changes
@@ -178,11 +180,13 @@ opts = {
 it would break jumping forward through the jumplist.
 
 An issue opens as an ordinary file buffer, so undo and `C-o`/`C-i` between the
-list, the issue and the note behave as they do anywhere else. Issue buffers are
-kept out of the buffer list, like the note buffers, and are saved the same way
-notes are: when the window closes, when it swaps to something else, and when
-nvim quits. Writing one by hand with `:w` does no harm, it is simply not
-needed.
+list, the issue and the note behave as they do anywhere else. Buffers of the
+plugin are kept out of the buffer list, and everything it owns follows one
+rule: **a buffer is written when it stops being visible** — left with `C-o`,
+swapped out of the window, or closed with it — plus a final write when nvim
+quits. Which note a buffer is, and where it is stored, is a property of the
+buffer itself, so jumping between notes never saves one over another. Writing
+by hand with `:w` does no harm, it is simply not needed.
 
 A jump can also land on a file that has nothing to do with notes or issues
 (`gF` from an issue into the code, `C-o` further back, `gd`). Such a file is
@@ -199,6 +203,11 @@ the scratch window closes.
 - `require('scratch').issues()` — Toggle the issue list.
 - `require('scratch').task(scope, title)` — Create an issue in `"local"` or
   `"global"` scope.
+- `require('scratch').open_issue(path)` — Show an issue file in the window.
+
+`reset()` clears the note that is **on screen**, and `next_type()` /
+`prev_type()` step away from it — the plugin always works with the buffer the
+window holds, never with a remembered selection.
 
 ## Issues
 
@@ -261,11 +270,28 @@ reordering rather than staying on the same row.
 every file carries the time of the clone, and `checkout` stamps the files it
 touches. For issues kept out of version control it is exact.
 
-The column header uses the `ScratchIssuesHeader` group, bold by default.
-Redefine it to taste, for example:
+### Highlighting
+
+The list carries one colour axis, and it is priority: the type is already
+legible as a word, while `HIGH` and `LOW` read alike until they differ in
+colour. Everything unimportant is dimmed rather than coloured, so there is one
+thing to follow instead of two competing ones.
+
+| Group | Applies to | Links to by default |
+|---|---|---|
+| `ScratchIssuesHeader` | the column header | bold |
+| `ScratchIssueCritical` | priority `critical` | `DiagnosticError` |
+| `ScratchIssueHigh` | priority `high` | `DiagnosticWarn` |
+| `ScratchIssueLow` | priority `low` | `Comment` |
+| `ScratchIssueDate` | the date column | `Comment` |
+| `ScratchIssueDone` | a closed issue, whole row | `Comment` |
+
+Priority `normal` is deliberately left plain. All groups are defined with
+`default = true`, so any definition of your own wins:
 
 ```lua
 vim.api.nvim_set_hl(0, "ScratchIssuesHeader", { link = "Title" })
+vim.api.nvim_set_hl(0, "ScratchIssueCritical", { fg = "#ff5555", bold = true })
 ```
 
 A path with a line number, like `src/parser.c:412`, is what `gF` already
