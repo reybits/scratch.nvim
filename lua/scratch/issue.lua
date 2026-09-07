@@ -77,17 +77,6 @@ function M.dir(scope)
     return paths.scope_dir(scope) .. "/issues"
 end
 
---- Whether a path is one of our issue files
----@param path string
----@return boolean
-function M.is_issue(path)
-    if path == "" then
-        return false
-    end
-    local dir = vim.fn.fnamemodify(path, ":h")
-    return dir == M.dir("local") or dir == M.dir("global")
-end
-
 --- Read an issue file. Everything below the title stays opaque to the store.
 ---@param path string
 ---@return scratch.Issue
