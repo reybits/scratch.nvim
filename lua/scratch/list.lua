@@ -192,7 +192,6 @@ local state = {
     bufnr = nil,
     scope = "local",
     line_map = {},
-    cursors = {},
 }
 
 local namespace = vim.api.nvim_create_namespace("scratch.nvim/list")
@@ -355,20 +354,62 @@ function M.render(entries, opts, width)
     return lines, line_map, marks
 end
 
---- Re-read the store and repaint the buffer
+--- Put lines into the buffer, touching only the range that differs.
+---
+--- Replacing every line would be simpler and is wrong: a mark cannot survive
+--- the deletion of the line it sits on, and the jumplist is made of marks. A
+--- list repainted on every entry would drop the entry that C-o goes back to,
+--- so the second jump into it would land on the first row.
+---@param bufnr number
+---@param lines string[]
+local function set_lines(bufnr, lines)
+    local shown = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+
+    local first = 1
+    while first <= #shown and first <= #lines and shown[first] == lines[first] do
+        first = first + 1
+    end
+
+    local last_shown, last_new = #shown, #lines
+    while last_shown >= first and last_new >= first and shown[last_shown] == lines[last_new] do
+        last_shown = last_shown - 1
+        last_new = last_new - 1
+    end
+
+    if first > last_shown and first > last_new then
+        return
+    end
+
+    vim.bo[bufnr].modifiable = true
+    vim.api.nvim_buf_set_lines(
+        bufnr,
+        first - 1,
+        last_shown,
+        false,
+        vim.list_slice(lines, first, last_new)
+    )
+    vim.bo[bufnr].modifiable = false
+end
+
+--- Re-read the store and repaint the buffer, leaving the cursor on the issue
+--- it stood on. A repaint may reorder the rows or drop one, so the row number
+--- the cursor held says nothing: what it belongs to is the issue.
 function M.refresh()
     local bufnr = state.bufnr
     if bufnr == nil or not vim.api.nvim_buf_is_valid(bufnr) then
         return
     end
 
+    local winnr = list_win()
+    local pos = winnr ~= -1 and vim.api.nvim_win_get_cursor(winnr) or nil
+    local standing = pos and state.line_map[pos[1]]
+
     local lines, line_map, marks = M.render(issue.list(state.scope), view, window_width())
     state.line_map = line_map
 
-    vim.bo[bufnr].modifiable = true
-    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-    vim.bo[bufnr].modifiable = false
+    set_lines(bufnr, lines)
 
+    -- :colorscheme clears them, so they are declared on every repaint
     vim.api.nvim_set_hl(0, header_group, { bold = true, default = true })
     for group, link in pairs(highlight_links) do
         vim.api.nvim_set_hl(0, group, { link = link, default = true })
@@ -380,6 +421,21 @@ function M.refresh()
         hl_group = header_group,
     })
     apply_marks(bufnr, marks)
+
+    if pos == nil then
+        return
+    end
+
+    local row = pos[1]
+    if standing then
+        for at, shown in pairs(line_map) do
+            if shown.path == standing.path then
+                row = at
+                break
+            end
+        end
+    end
+    pcall(vim.api.nvim_win_set_cursor, winnr, { math.min(row, #lines), pos[2] })
 end
 
 --- Show an issue as an ordinary file buffer, so writing, undo and C-o back
@@ -471,12 +527,10 @@ local function cycle_field(field)
     repaint_row(row, entry)
 end
 
---- Move to the next or previous sort order, keeping the cursor on the same
---- issue rather than the same row: the rows have just been reshuffled
+--- Move to the next or previous sort order. The repaint carries the cursor
+--- through the reshuffling on its own.
 ---@param offset number: 1 for next, -1 for previous
 local function cycle_sort(offset)
-    local entry = state.line_map[vim.api.nvim_win_get_cursor(0)[1]]
-
     local index = 1
     for i, candidate in ipairs(sorters) do
         if candidate.name == view.sort then
@@ -487,16 +541,6 @@ local function cycle_sort(offset)
     view.sort = sorters[(index - 1 + offset) % #sorters + 1].name
 
     M.refresh()
-
-    if entry then
-        for row, shown in pairs(state.line_map) do
-            if shown.path == entry.path then
-                pcall(vim.api.nvim_win_set_cursor, list_win(), { row, 0 })
-                break
-            end
-        end
-    end
-
     window.update()
 end
 
@@ -506,60 +550,67 @@ local function toggle_scope()
     window.remember_cursor()
     state.scope = state.scope == "local" and "global" or "local"
     M.refresh()
-    window.restore_cursor(2)
+    window.restore_cursor()
     window.update()
 end
 
---- The list buffer, created on first use and repainted whenever it is entered
+--- The list buffer, created on first use, always ready to be shown
 ---@return number bufnr
 function M.buffer()
-    if state.bufnr and vim.api.nvim_buf_is_valid(state.bufnr) then
-        return state.bufnr
+    if state.bufnr == nil or not vim.api.nvim_buf_is_valid(state.bufnr) then
+        -- Named so that :edit, and plugins that open in the current window,
+        -- create their own buffer instead of taking this one over
+        local bufnr = vim.fn.bufadd("scratch://issues")
+        vim.fn.bufload(bufnr)
+        buffers.set(bufnr, { kind = "list" })
+
+        vim.bo[bufnr].buftype = "nofile"
+        vim.bo[bufnr].filetype = "scratchissues"
+        vim.bo[bufnr].buflisted = false
+        vim.bo[bufnr].swapfile = false
+        vim.bo[bufnr].bufhidden = "hide"
+        vim.bo[bufnr].modifiable = false
+
+        vim.keymap.set("n", "<CR>", open_entry, { buffer = bufnr, noremap = true, silent = true })
+
+        vim.keymap.set("n", "q", window.close, { buffer = bufnr, noremap = true, silent = true })
+
+        -- Tab is the same keycode as C-i: mapping it would eat the jump forward
+        vim.keymap.set(
+            "n",
+            "<S-Tab>",
+            toggle_scope,
+            { buffer = bufnr, noremap = true, silent = true }
+        )
+
+        for key, field in pairs({ T = "type", P = "priority", S = "status" }) do
+            vim.keymap.set("n", key, function()
+                cycle_field(field)
+            end, { buffer = bufnr, noremap = true, silent = true })
+        end
+
+        for key, offset in pairs({ [">"] = 1, ["<"] = -1 }) do
+            vim.keymap.set("n", key, function()
+                cycle_sort(offset)
+            end, { buffer = bufnr, noremap = true, silent = true })
+        end
+
+        -- Coming back from an issue must show what was just edited
+        vim.api.nvim_create_autocmd("BufEnter", {
+            group = vim.api.nvim_create_augroup("scratch.nvim-list", { clear = true }),
+            buffer = bufnr,
+            callback = function()
+                M.refresh()
+            end,
+        })
+
+        state.bufnr = bufnr
     end
 
-    -- Named so that :edit, and plugins that open in the current window, create
-    -- their own buffer instead of taking this one over
-    local bufnr = vim.fn.bufadd("scratch://issues")
-    vim.fn.bufload(bufnr)
-    buffers.set(bufnr, { kind = "list" })
-
-    vim.bo[bufnr].buftype = "nofile"
-    vim.bo[bufnr].filetype = "scratchissues"
-    vim.bo[bufnr].buflisted = false
-    vim.bo[bufnr].swapfile = false
-    vim.bo[bufnr].bufhidden = "hide"
-    vim.bo[bufnr].modifiable = false
-
-    vim.keymap.set("n", "<CR>", open_entry, { buffer = bufnr, noremap = true, silent = true })
-
-    vim.keymap.set("n", "q", window.close, { buffer = bufnr, noremap = true, silent = true })
-
-    -- Tab is the same keycode as C-i: mapping it would eat the jump forward
-    vim.keymap.set("n", "<S-Tab>", toggle_scope, { buffer = bufnr, noremap = true, silent = true })
-
-    for key, field in pairs({ T = "type", P = "priority", S = "status" }) do
-        vim.keymap.set("n", key, function()
-            cycle_field(field)
-        end, { buffer = bufnr, noremap = true, silent = true })
-    end
-
-    for key, offset in pairs({ [">"] = 1, ["<"] = -1 }) do
-        vim.keymap.set("n", key, function()
-            cycle_sort(offset)
-        end, { buffer = bufnr, noremap = true, silent = true })
-    end
-
-    -- Coming back from an issue must show what was just edited
-    vim.api.nvim_create_autocmd("BufEnter", {
-        group = vim.api.nvim_create_augroup("scratch.nvim-list", { clear = true }),
-        buffer = bufnr,
-        callback = function()
-            M.refresh()
-        end,
-    })
-
-    state.bufnr = bufnr
-    return bufnr
+    -- The window shows what it is handed, so the rows are built before it
+    -- gets there rather than by whoever opened it afterwards
+    M.refresh()
+    return state.bufnr
 end
 
 --- Scope the list is currently showing

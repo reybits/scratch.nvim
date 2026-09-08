@@ -21,6 +21,7 @@ local M = {}
 ---@field title string
 ---@field footer string
 ---@field cursor_key string|nil: nil for buffers whose position Neovim keeps itself
+---@field cursor_home number|nil: line to start on when nothing is remembered
 ---@field kind string
 
 ---@type scratch.Config
@@ -28,6 +29,10 @@ local config
 
 ---@type fun(bufnr: number): scratch.Chrome
 local describe
+
+---@type fun()|nil: called after the window is gone, so the application can
+--- let go of whatever it was keeping for it
+local on_close
 
 local state = {
     winnr = nil,
@@ -38,12 +43,14 @@ local state = {
     closing = false,
 }
 
---- Install the configuration and the buffer describer
+--- Install the configuration, the buffer describer and the close hook
 ---@param cfg scratch.Config
 ---@param describer fun(bufnr: number): scratch.Chrome
-function M.setup(cfg, describer)
+---@param closer fun()|nil
+function M.setup(cfg, describer, closer)
     config = cfg
     describe = describer
+    on_close = closer
 end
 
 -- ── geometry ────────────────────────────────────────────────────────
@@ -149,21 +156,24 @@ function M.remember_cursor()
     end
 end
 
---- Put the cursor back where this content was left, clamped to the buffer
----@param fallback number|nil: line to use when nothing is remembered
-function M.restore_cursor(fallback)
+--- Put the cursor back where this content was left, clamped to the buffer.
+--- Called by the window itself whenever it changes what it shows, so no
+--- caller has to remember to do it - forgetting once loses the position for
+--- that path only, which is exactly how it went unnoticed before.
+function M.restore_cursor()
     if not M.is_open() then
         return
     end
 
     local bufnr = vim.api.nvim_win_get_buf(state.winnr)
-    local key = describe(bufnr).cursor_key
-    local pos = key and state.cursors[key]
-    if pos == nil and fallback == nil then
+    local chrome = describe(bufnr)
+    local pos = chrome.cursor_key and state.cursors[chrome.cursor_key]
+
+    if pos == nil and chrome.cursor_home == nil then
         return
     end
 
-    pos = pos or { fallback, 0 }
+    pos = pos or { chrome.cursor_home, 0 }
     local last = vim.api.nvim_buf_line_count(bufnr)
     pcall(vim.api.nvim_win_set_cursor, state.winnr, { math.min(pos[1], math.max(last, 1)), pos[2] })
 end
@@ -323,6 +333,7 @@ function M.show(kind, get_buffer)
     vim.api.nvim_win_set_buf(state.winnr, get_buffer())
     vim.api.nvim_set_current_win(state.winnr)
     M.update()
+    M.restore_cursor()
 end
 
 --- Put a buffer on screen, opening the window if needed
@@ -336,6 +347,7 @@ function M.swap_to(bufnr)
         M.open(bufnr)
     end
     M.update()
+    M.restore_cursor()
 end
 
 --- Close the window and its footer
@@ -356,6 +368,10 @@ function M.close()
     vim.api.nvim_clear_autocmds({ group = augroup })
 
     state.closing = false
+
+    if on_close then
+        on_close()
+    end
 end
 
 return M
