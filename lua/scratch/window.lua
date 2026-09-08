@@ -6,13 +6,16 @@
 -- GitHub: https://github.com/reybits/scratch.nvim
 --
 -- The floating window and its footer: opening, closing, swapping what is on
--- screen, keeping the chrome in step with it, and remembering where the
--- cursor stood.
+-- screen, and keeping the chrome in step with it.
 --
--- It knows nothing about notes or issues. What a buffer is called, what its
--- footer says and under which key its cursor belongs is answered by the
--- describe() callback the application installs, so this module never has to
--- reach back into the one that owns the content.
+-- It knows nothing about notes or issues. What a buffer is called and what its
+-- footer says is answered by the describe() callback the application installs,
+-- so this module never has to reach back into the one that owns the content.
+--
+-- Where the cursor stood is not kept here either. Every piece of content the
+-- window shows has a buffer of its own, and Neovim already remembers the
+-- position of a buffer - a second memory only drifts from it, because a jump
+-- with C-o leaves without telling the window.
 -------------------------------------------------------------------------------
 
 local M = {}
@@ -20,8 +23,6 @@ local M = {}
 ---@class scratch.Chrome
 ---@field title string
 ---@field footer string
----@field cursor_key string|nil: nil for buffers whose position Neovim keeps itself
----@field cursor_home number|nil: line to start on when nothing is remembered
 ---@field kind string
 
 ---@type scratch.Config
@@ -39,7 +40,6 @@ local state = {
     foonr = nil,
     foo_bufnr = nil,
     prev_winnr = nil,
-    cursors = {},
     closing = false,
 }
 
@@ -142,48 +142,6 @@ local function draw_footer(text)
     vim.api.nvim_buf_set_lines(footer_buffer(), 0, -1, false, { " " .. text })
 end
 
--- ── cursor ──────────────────────────────────────────────────────────
-
---- Remember where the cursor stands in whatever is on screen
-function M.remember_cursor()
-    if not M.is_open() then
-        return
-    end
-
-    local key = describe(vim.api.nvim_win_get_buf(state.winnr)).cursor_key
-    if key then
-        state.cursors[key] = vim.api.nvim_win_get_cursor(state.winnr)
-    end
-end
-
---- Put the cursor back where this content was left, clamped to the buffer.
---- Called by the window itself whenever it changes what it shows, so no
---- caller has to remember to do it - forgetting once loses the position for
---- that path only, which is exactly how it went unnoticed before.
-function M.restore_cursor()
-    if not M.is_open() then
-        return
-    end
-
-    local bufnr = vim.api.nvim_win_get_buf(state.winnr)
-    local chrome = describe(bufnr)
-    local pos = chrome.cursor_key and state.cursors[chrome.cursor_key]
-
-    if pos == nil and chrome.cursor_home == nil then
-        return
-    end
-
-    pos = pos or { chrome.cursor_home, 0 }
-    local last = vim.api.nvim_buf_line_count(bufnr)
-    pcall(vim.api.nvim_win_set_cursor, state.winnr, { math.min(pos[1], math.max(last, 1)), pos[2] })
-end
-
---- Forget the remembered position of a piece of content
----@param key string
-function M.forget_cursor(key)
-    state.cursors[key] = nil
-end
-
 -- ── window ──────────────────────────────────────────────────────────
 
 ---@return boolean
@@ -254,7 +212,6 @@ function M.open(bufnr)
 
     state.winnr = vim.api.nvim_open_win(bufnr, true, cfg.cfg_wnd)
     apply_win_opts(state.winnr)
-    M.restore_cursor()
 
     draw_footer(cfg.footer_text)
     state.foonr = vim.api.nvim_open_win(footer_buffer(), false, cfg.cfg_foo)
@@ -329,25 +286,21 @@ function M.show(kind, get_buffer)
         return
     end
 
-    M.remember_cursor()
     vim.api.nvim_win_set_buf(state.winnr, get_buffer())
     vim.api.nvim_set_current_win(state.winnr)
     M.update()
-    M.restore_cursor()
 end
 
 --- Put a buffer on screen, opening the window if needed
 ---@param bufnr number
 function M.swap_to(bufnr)
     if M.is_open() then
-        M.remember_cursor()
         vim.api.nvim_set_current_win(state.winnr)
         vim.api.nvim_win_set_buf(state.winnr, bufnr)
     else
         M.open(bufnr)
     end
     M.update()
-    M.restore_cursor()
 end
 
 --- Close the window and its footer
@@ -356,8 +309,6 @@ function M.close()
         return
     end
     state.closing = true
-
-    M.remember_cursor()
 
     pcall(vim.api.nvim_win_close, state.winnr, true)
     state.winnr = nil

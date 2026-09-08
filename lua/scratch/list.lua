@@ -189,12 +189,33 @@ local view = {
 }
 
 local state = {
-    bufnr = nil,
+    --- Which list to open with. A memory of the last one seen, the way init
+    --- keeps the last note type - never the answer to "which list is this".
     scope = "local",
-    line_map = {},
+
+    --- One record per issue directory, because that is what a list shows: the
+    --- local list of another project is another list, with rows and a cursor
+    --- of its own, and a single buffer could not hold two of them.
+    ---@type table<string, { bufnr: number, line_map: table }>
+    lists = {},
 }
 
+--- The record behind a buffer, or nil when the buffer is not a list of ours
+---@param bufnr number
+---@return table|nil
+local function record(bufnr)
+    local info = buffers.get(bufnr)
+    if info == nil or info.kind ~= "list" then
+        return nil
+    end
+    return state.lists[info.dir]
+end
+
 local namespace = vim.api.nvim_create_namespace("scratch.nvim/list")
+
+--- Cleared once, when the module loads: clearing it per buffer would take the
+--- autocommands of every list created before this one with it.
+local augroup = vim.api.nvim_create_augroup("scratch.nvim-list", { clear = true })
 
 --- Highlight group of the column header, so it does not read as another row.
 --- Defined on every repaint because :colorscheme clears it, and marked default
@@ -293,19 +314,18 @@ local function row_cells(entry, sort)
     return cells
 end
 
---- Window showing the list, or -1 while it has none
+--- Window showing a list buffer, or -1 while it has none
+---@param bufnr number
 ---@return number
-local function list_win()
-    if state.bufnr == nil then
-        return -1
-    end
-    return vim.fn.bufwinid(state.bufnr)
+local function list_win(bufnr)
+    return vim.fn.bufwinid(bufnr)
 end
 
---- Width available to the list, or a sane default while it has no window
+--- Width available to a list, or a sane default while it has no window
+---@param bufnr number
 ---@return number
-local function window_width()
-    local winnr = list_win()
+local function window_width(bufnr)
+    local winnr = list_win(bufnr)
     if winnr == -1 then
         return 80
     end
@@ -394,18 +414,28 @@ end
 --- Re-read the store and repaint the buffer, leaving the cursor on the issue
 --- it stood on. A repaint may reorder the rows or drop one, so the row number
 --- the cursor held says nothing: what it belongs to is the issue.
-function M.refresh()
-    local bufnr = state.bufnr
-    if bufnr == nil or not vim.api.nvim_buf_is_valid(bufnr) then
+---@param bufnr number
+function M.refresh(bufnr)
+    local shown = record(bufnr)
+    if shown == nil or not vim.api.nvim_buf_is_valid(bufnr) then
         return
     end
 
-    local winnr = list_win()
-    local pos = winnr ~= -1 and vim.api.nvim_win_get_cursor(winnr) or nil
-    local standing = pos and state.line_map[pos[1]]
+    -- Rows are cut to the width of the window they are shown in, so off
+    -- screen there is nothing to render against. Guessing a width produces
+    -- rows that differ from the real ones, and replacing them would take the
+    -- position of the buffer with them. Entering it repaints it anyway.
+    local winnr = list_win(bufnr)
+    if winnr == -1 then
+        return
+    end
 
-    local lines, line_map, marks = M.render(issue.list(state.scope), view, window_width())
-    state.line_map = line_map
+    local pos = vim.api.nvim_win_get_cursor(winnr)
+    local standing = shown.line_map[pos[1]]
+
+    local scope = buffers.get(bufnr).scope
+    local lines, line_map, marks = M.render(issue.list(scope), view, window_width(bufnr))
+    shown.line_map = line_map
 
     set_lines(bufnr, lines)
 
@@ -421,10 +451,6 @@ function M.refresh()
         hl_group = header_group,
     })
     apply_marks(bufnr, marks)
-
-    if pos == nil then
-        return
-    end
 
     local row = pos[1]
     if standing then
@@ -450,7 +476,6 @@ function M.open(path)
     if not window.is_open() then
         -- open on the list, so C-o from the issue lands there
         window.open(M.buffer())
-        M.refresh()
     end
 
     local bufnr = vim.fn.bufadd(path)
@@ -460,7 +485,8 @@ end
 
 --- Open the issue under the cursor
 local function open_entry()
-    local entry = state.line_map[vim.api.nvim_win_get_cursor(0)[1]]
+    local shown = record(vim.api.nvim_get_current_buf())
+    local entry = shown and shown.line_map[vim.api.nvim_win_get_cursor(0)[1]]
     if entry == nil then
         return
     end
@@ -485,25 +511,28 @@ local function reload_buffer(path)
 end
 
 --- Repaint a single row in place
+---@param bufnr number
 ---@param row number
 ---@param entry scratch.Issue
-local function repaint_row(row, entry)
-    local line, spans = format_row(row_cells(entry, view.sort), window_width())
+local function repaint_row(bufnr, row, entry)
+    local line, spans = format_row(row_cells(entry, view.sort), window_width(bufnr))
 
-    vim.bo[state.bufnr].modifiable = true
-    vim.api.nvim_buf_set_lines(state.bufnr, row - 1, row, false, { line })
-    vim.bo[state.bufnr].modifiable = false
+    vim.bo[bufnr].modifiable = true
+    vim.api.nvim_buf_set_lines(bufnr, row - 1, row, false, { line })
+    vim.bo[bufnr].modifiable = false
 
     -- the row may have just become a closed one, so its old marks go too
-    vim.api.nvim_buf_clear_namespace(state.bufnr, namespace, row - 1, row)
-    apply_marks(state.bufnr, row_marks(entry, spans, line, row - 1))
+    vim.api.nvim_buf_clear_namespace(bufnr, namespace, row - 1, row)
+    apply_marks(bufnr, row_marks(entry, spans, line, row - 1))
 end
 
 --- Move the field of the issue under the cursor to its next value
 ---@param field string
 local function cycle_field(field)
+    local bufnr = vim.api.nvim_get_current_buf()
     local row = vim.api.nvim_win_get_cursor(0)[1]
-    local entry = state.line_map[row]
+    local shown = record(bufnr)
+    local entry = shown and shown.line_map[row]
     if entry == nil then
         return
     end
@@ -524,7 +553,7 @@ local function cycle_field(field)
     -- under the cursor, and the next keypress would land on whatever slid
     -- into its place. The filter applies when the list is next built.
     entry[field] = values[next_index]
-    repaint_row(row, entry)
+    repaint_row(bufnr, row, entry)
 end
 
 --- Move to the next or previous sort order. The repaint carries the cursor
@@ -540,29 +569,31 @@ local function cycle_sort(offset)
     end
     view.sort = sorters[(index - 1 + offset) % #sorters + 1].name
 
-    M.refresh()
+    M.refresh(vim.api.nvim_get_current_buf())
     window.update()
 end
 
---- Each scope is its own list, so the cursor is remembered per scope; the
---- window keys it by the scope in effect when it is asked.
+--- Switch between the local and the global list. Each is a buffer of its own,
+--- so showing one is an ordinary swap and the window does the rest.
 local function toggle_scope()
-    window.remember_cursor()
     state.scope = state.scope == "local" and "global" or "local"
-    M.refresh()
-    window.restore_cursor()
-    window.update()
+    window.swap_to(M.buffer())
 end
 
---- The list buffer, created on first use, always ready to be shown
+--- The buffer of the list to show, created on first use, always ready to go
 ---@return number bufnr
 function M.buffer()
-    if state.bufnr == nil or not vim.api.nvim_buf_is_valid(state.bufnr) then
-        -- Named so that :edit, and plugins that open in the current window,
-        -- create their own buffer instead of taking this one over
-        local bufnr = vim.fn.bufadd("scratch://issues")
+    local scope = state.scope
+    local dir = issue.dir(scope)
+    local shown = state.lists[dir]
+
+    if shown == nil or not vim.api.nvim_buf_is_valid(shown.bufnr) then
+        -- Named after the directory it lists, so that every project gets a
+        -- buffer of its own, and so that :edit and plugins that open in the
+        -- current window create their own instead of taking this one over
+        local bufnr = vim.fn.bufadd("scratch://issues" .. dir)
         vim.fn.bufload(bufnr)
-        buffers.set(bufnr, { kind = "list" })
+        buffers.set(bufnr, { kind = "list", scope = scope, dir = dir })
 
         vim.bo[bufnr].buftype = "nofile"
         vim.bo[bufnr].filetype = "scratchissues"
@@ -595,25 +626,36 @@ function M.buffer()
             end, { buffer = bufnr, noremap = true, silent = true })
         end
 
-        -- Coming back from an issue must show what was just edited
+        -- Coming back from an issue must show what was just edited. The list
+        -- entered is also the one to open with next time, the same way the
+        -- note last seen decides which note :ScratchToggle shows.
         vim.api.nvim_create_autocmd("BufEnter", {
-            group = vim.api.nvim_create_augroup("scratch.nvim-list", { clear = true }),
+            group = augroup,
             buffer = bufnr,
             callback = function()
-                M.refresh()
+                state.scope = scope
+                M.refresh(bufnr)
+
+                -- The header answers to no key, so a list is entered on its
+                -- first issue. Only the first time: after that the position
+                -- is the one the buffer was left on.
+                if shown.fresh then
+                    shown.fresh = false
+                    pcall(vim.api.nvim_win_set_cursor, 0, { 2, 0 })
+                end
             end,
         })
 
-        state.bufnr = bufnr
+        shown = { bufnr = bufnr, line_map = {}, fresh = true }
+        state.lists[dir] = shown
     end
 
-    -- The window shows what it is handed, so the rows are built before it
-    -- gets there rather than by whoever opened it afterwards
-    M.refresh()
-    return state.bufnr
+    -- Not repainted here: that happens on entering the buffer, which is the
+    -- first moment there is a window to size the rows against.
+    return shown.bufnr
 end
 
---- Scope the list is currently showing
+--- Scope of the list to open with: a memory of the last one seen
 ---@return string
 function M.scope()
     return state.scope
@@ -623,13 +665,6 @@ end
 ---@return string
 function M.sort()
     return view.sort
-end
-
---- Whether the buffer is the list itself
----@param bufnr number
----@return boolean
-function M.is_buffer(bufnr)
-    return state.bufnr ~= nil and bufnr == state.bufnr
 end
 
 return M

@@ -20,7 +20,8 @@ local M = {}
 ---@class scratch.BufferInfo
 ---@field kind string: "note" or "list" or "issue"
 ---@field type string|nil: note type, for kind "note"
----@field scope string|nil: issue scope, for kind "issue"
+---@field scope string|nil: issue scope, for kind "list"
+---@field dir string|nil: directory listed, for kind "list"
 ---@field path string|nil: file backing the buffer, nil when it has none
 
 ---@type table<number, scratch.BufferInfo>

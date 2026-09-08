@@ -7,8 +7,8 @@
 --
 -- Configuration, the note buffers and the commands. The window lives in
 -- window.lua and asks this module, through describe(), what a buffer should
--- be called and where its cursor belongs - so the dependencies point one way
--- only: init -> list -> window, and everyone -> buffers.
+-- be called - so the dependencies point one way only: init -> list -> window,
+-- and everyone -> buffers.
 --
 -- Persistence has a single rule: a buffer is written when it stops being
 -- visible. Where it goes is a property of the buffer, kept in the registry,
@@ -99,19 +99,30 @@ local function save_all()
     end
 end
 
---- Let go of the issue buffers when the window closes. They exist to be read
---- and edited in it; keeping them afterwards leaves modified buffers around
---- that block quitting and drift away from their files.
+--- Let go of every buffer that has a file when the window closes. They exist
+--- to be read and edited in it, and the file is where they come back from;
+--- kept around instead, they accumulate as buffers that block quitting and
+--- drift away from what is on disk while another session writes it.
 ---
---- A buffer that is still modified here was changed outside the window - it
---- is not ours to discard, so it stays and Neovim will ask about it.
-local function release_issues()
-    buffers.each("issue", function(bufnr)
-        if not vim.bo[bufnr].modified then
+--- What has no file stays, because nothing could bring it back: the temporary
+--- note lives only in its buffer, and a list is rebuilt from the issues.
+---
+--- Unloaded rather than deleted: an unloaded buffer holds nothing but its
+--- name, which is what lets Neovim put the cursor back where it stood when
+--- the file is read again. Deleting it would throw that away too.
+---
+--- A buffer still modified here was changed outside the window - it is not
+--- ours to discard, so it stays and Neovim will ask about it.
+local function release_buffers()
+    local function release(bufnr, info)
+        if info.path and not vim.bo[bufnr].modified then
             buffers.forget(bufnr)
-            pcall(vim.api.nvim_buf_delete, bufnr, {})
+            pcall(vim.api.nvim_buf_delete, bufnr, { unload = true })
         end
-    end)
+    end
+
+    buffers.each("note", release)
+    buffers.each("issue", release)
 end
 
 -- ── Note types ──────────────────────────────────────────────────────
@@ -143,9 +154,9 @@ end
 
 -- ── What the window shows ───────────────────────────────────────────
 
---- Everything the window needs about a buffer: how to name it, what to offer
---- in the footer, and under which key its cursor belongs. Derived from the
---- registry, so it always describes what is on screen.
+--- Everything the window needs about a buffer: how to name it and what to
+--- offer in the footer. Derived from the registry, so it always describes
+--- what is on screen.
 ---@param bufnr number
 ---@return scratch.Chrome
 local function describe(bufnr)
@@ -155,7 +166,7 @@ local function describe(bufnr)
     if kind == "list" then
         return {
             kind = kind,
-            title = " " .. config.title .. " [Issues: " .. type_label(list.scope()) .. "] ",
+            title = " " .. config.title .. " [Issues: " .. type_label(info.scope) .. "] ",
             footer = table.concat({
                 "'q' close",
                 "'CR' open",
@@ -163,9 +174,6 @@ local function describe(bufnr)
                 "'T'ype/'P'riority/'S'tatus",
                 "'<'/'>' sort",
             }, "  |  "),
-            cursor_key = "list/" .. list.scope(),
-            -- the header answers to no key, so start on the first issue
-            cursor_home = 2,
         }
     end
 
@@ -174,8 +182,6 @@ local function describe(bufnr)
             kind = kind,
             title = " " .. config.title .. " [Issue] ",
             footer = table.concat({ "'C-o' back", "saved on close" }, "  |  "),
-            -- a file buffer keeps its own position
-            cursor_key = nil,
         }
     end
 
@@ -192,8 +198,6 @@ local function describe(bufnr)
         title = #types == 1 and (" " .. config.title .. " ")
             or (" " .. config.title .. " [" .. type_label(type) .. "] "),
         footer = table.concat(parts, "  |  "),
-        -- a note is a buffer of its own, and Neovim keeps its position
-        cursor_key = nil,
     }
 end
 
@@ -377,18 +381,19 @@ end
 function M.setup(opts)
     config = vim.tbl_deep_extend("force", {}, defaults, opts or {})
     paths.setup(config)
-    window.setup(config, describe, release_issues)
+    window.setup(config, describe, release_buffers)
 
     vim.api.nvim_create_user_command("ScratchToggle", M.toggle, {})
     vim.api.nvim_create_user_command("ScratchIssues", M.issues, {})
 
     -- Bang targets the global scope; inside the list the visible scope wins
     vim.api.nvim_create_user_command("ScratchTask", function(args)
+        local info = buffers.get(vim.api.nvim_get_current_buf())
         local scope = "local"
         if args.bang then
             scope = "global"
-        elseif list.is_buffer(vim.api.nvim_get_current_buf()) then
-            scope = list.scope()
+        elseif info and info.kind == "list" then
+            scope = info.scope
         end
         M.task(scope, args.args)
     end, { nargs = "?", bang = true })
