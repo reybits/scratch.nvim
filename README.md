@@ -1,12 +1,16 @@
 # Neovim Scratch Buffer
 
-A Neovim plugin for quick scratch notes in a floating window. Supports
-three note types: temporary (in-memory), local (per-project, saved to disk),
-and global (shared across projects, saved to disk). Switch between them with
-`S-Tab`.
+A Neovim plugin that keeps notes and small issues in one floating window,
+a keystroke away from whatever you are working on.
 
-Alongside free-form notes it keeps lightweight issues: plain markdown files
-with a few metadata fields, shown as a sortable list in the same window.
+Notes come in three scopes: temporary (in-memory), local (per-project) and
+global (shared across projects); `S-Tab` cycles them. Issues are one markdown
+file each, carrying a few metadata fields, shown as a sortable list in the
+same window and opened in place of a note.
+
+Everything the window shows is an ordinary buffer, and everything with a file
+behind it is an ordinary file buffer — so `:w`, undo, `C-o`/`C-i` and the
+cursor position behave exactly as they do anywhere else in Neovim.
 
 ![A note in the scratch window](.github/screenshots/notes.png)
 
@@ -24,12 +28,12 @@ and a closed issue keeps a checkbox-style mark.*
 - **Local notes** — persisted per-project (`.scratch/note.md` at the git root).
 - **Global notes** — persisted across projects (`stdpath("data")/scratch.nvim/note.md`).
 - Cycle between note types with `S-Tab`.
-- Notes auto-save on close, type switch, and `VimLeavePre`.
 - A note is an ordinary markdown file buffer, so writing, undo, reloading and
   the cursor position are Neovim's own. Its file appears the first time there
   is something to write, so a note you never touched leaves nothing on disk.
 - **Issues** — one markdown file per issue, local to a project or global,
-  listed in the same window and opened as ordinary file buffers.
+  listed in the same window and opened as ordinary file buffers. Every project
+  has a list of its own, remembering the row you left it on.
 - Type, priority and status are changed straight from the list; the list is
   ordered by any of its columns, and priority is colour-coded.
 - Nothing of the plugin's own ends up in the buffer list, and a file that
