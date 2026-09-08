@@ -35,7 +35,8 @@ and a closed issue keeps a checkbox-style mark.*
 - Nothing of the plugin's own ends up in the buffer list, and a file that
   belongs to neither notes nor issues is never left inside the window.
 - Notes and issues are written whenever they leave the screen, so nothing is
-  lost by jumping away or closing the window.
+  lost by jumping away or closing the window. Closing it also lets those
+  buffers go, and they come back from their files where you left them.
 - Configurable window size, border, title, and behavior.
 
 ## Breaking changes
@@ -180,16 +181,19 @@ opts = {
 `Tab` is deliberately left alone: it is the same keycode as `C-i`, and mapping
 it would break jumping forward through the jumplist.
 
-An issue opens as an ordinary file buffer, so undo and `C-o`/`C-i` between the
-list, the issue and the note behave as they do anywhere else. Buffers of the
-plugin are kept out of the buffer list, and everything it owns follows one
-rule: **a buffer is written when it stops being visible** — left with `C-o`,
-swapped out of the window, or closed with it — plus a final write when nvim
-quits. Issue buffers live no longer than the window: closing it writes them
-and lets them go, so they neither pile up nor stand between you and `:q`.
-Which note a buffer is, and where it is stored, is a property of the buffer
-itself, so jumping between notes never saves one over another. Writing by
-hand with `:w` does no harm, it is simply not needed.
+Notes and issues alike are ordinary file buffers, so `:w`, undo, `C-o`/`C-i`
+and the cursor position behave as they do anywhere else — the plugin keeps no
+positions of its own. Its buffers stay out of the buffer list, and everything
+it owns follows one rule: **a buffer is written when it stops being visible** —
+left with `C-o`, swapped out of the window, or closed with it — plus a final
+write when nvim quits. Buffers that have a file live no longer than the window:
+closing it writes them and lets them go, so they neither pile up nor stand
+between you and `:q`, and reopening reads them back where you were. The
+temporary note is the exception, because it exists nowhere but in its buffer:
+it stays for the session, undo history and all.
+
+Two Neovim instances sharing a note behave the way two instances sharing any
+file do — the one that writes second is told the file changed underneath it.
 
 A jump can also land on a file that has nothing to do with notes or issues
 (`gF` from an issue into the code, `C-o` further back, `gd`). Such a file is
@@ -250,8 +254,10 @@ key never lands on a different issue than the one under the cursor.
 
 The list shows open issues, newest first, with a checkbox-style mark for
 closed ones. Sorting and filtering are properties of the view and never
-rewrite the files. The cursor position is remembered separately for each
-scope, so reopening the list puts you back where you were.
+rewrite the files. Each issue directory has a list of its own — the local
+issues of one project are never those of another — so reopening a list puts
+you back on the row you left; it starts on the first issue only the first
+time.
 
 `>` and `<` walk the sort orders in the order the columns appear: `type` (bugs
 first), `priority` (critical first), `created`, `updated`, `title`. The order
