@@ -63,90 +63,53 @@ local function note_path(type)
     return paths.scope_dir(type) .. "/note.md"
 end
 
---- Load file contents into a buffer
+--- Write a buffer that stands for a file. Everything the plugin keeps on disk
+--- is an ordinary file buffer, so one rule covers notes and issues alike.
+---
+--- Vim must ask before overwriting a file that changed under a modified
+--- buffer, and at quit time there is nobody to ask - which is how Neovim hung
+--- instead of exiting. A drifted buffer is therefore left alone: quitting is
+--- refused with E162 naming the file, and resolving it (`:w!` or `:e!`) stays
+--- the user's call rather than something the plugin decides silently.
 ---@param bufnr number
----@param path string
-local function load_file(bufnr, path)
-    if vim.fn.filereadable(path) == 1 then
-        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, vim.fn.readfile(path))
-    end
-end
-
---- Check whether the note holds nothing but blank lines
----@param lines string[]
----@return boolean
-local function is_blank(lines)
-    for _, line in ipairs(lines) do
-        if not line:match("^%s*$") then
-            return false
-        end
-    end
-    return true
-end
-
---- Save buffer contents to a file
----@param bufnr number
----@param path string
-local function save_file(bufnr, path)
+local function write_buffer(bufnr)
     if not vim.api.nvim_buf_is_valid(bufnr) then
         return
     end
-
-    local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-    -- An empty note leaves no file behind; a cleared one takes its file with it
-    if is_blank(lines) then
-        if vim.fn.filereadable(path) == 1 then
-            vim.fn.delete(path)
-        end
+    if vim.bo[bufnr].buftype ~= "" or not vim.bo[bufnr].modified then
         return
     end
 
-    local dir = vim.fn.fnamemodify(path, ":h")
-    if vim.fn.isdirectory(dir) == 0 then
-        vim.fn.mkdir(dir, "p")
-    end
-    vim.fn.writefile(lines, path)
+    vim.api.nvim_buf_call(bufnr, function()
+        vim.cmd("silent write")
+    end)
 end
 
---- Path a buffer is stored at, asked of the buffer rather than of any state
----@param bufnr number
----@return string|nil
-local function path_of(bufnr)
-    local info = buffers.get(bufnr)
-    if info == nil or info.kind ~= "note" then
-        return nil
-    end
-    return note_path(info.type)
-end
-
---- Write a note buffer to the file of its own type
----@param bufnr number
-local function save_note(bufnr)
-    local path = path_of(bufnr)
-    if path then
-        save_file(bufnr, path)
-    end
-end
-
---- Re-read a note buffer from the file of its own type
----@param bufnr number
-local function reload_note(bufnr)
-    local path = path_of(bufnr)
-    if path then
-        load_file(bufnr, path)
-    end
-end
-
---- Write everything of ours, for the quit. Buffers are written when they stop
---- being visible; the one still on screen never gets that chance, and a quit
---- is refused before any window closes.
+--- Write what is on screen, for the quit. Buffers are written when they stop
+--- being visible; the one still in the window never gets that chance, and a
+--- quit is refused before any window closes.
+---
+--- Nothing else is written here. A buffer of ours that is off screen has been
+--- through that rule already, and one still modified afterwards was edited
+--- outside the window - writing it would overwrite work we know nothing about.
 local function save_all()
-    buffers.each("note", save_note)
+    local shown = window.current_buf()
+    if shown and buffers.get(shown) then
+        write_buffer(shown)
+    end
+end
+
+--- Let go of the issue buffers when the window closes. They exist to be read
+--- and edited in it; keeping them afterwards leaves modified buffers around
+--- that block quitting and drift away from their files.
+---
+--- A buffer that is still modified here was changed outside the window - it
+--- is not ours to discard, so it stays and Neovim will ask about it.
+local function release_issues()
     buffers.each("issue", function(bufnr)
-        if vim.bo[bufnr].modified then
-            vim.api.nvim_buf_call(bufnr, function()
-                vim.cmd("silent write")
-            end)
+        if not vim.bo[bufnr].modified then
+            buffers.forget(bufnr)
+            pcall(vim.api.nvim_buf_delete, bufnr, {})
         end
     end)
 end
@@ -201,6 +164,8 @@ local function describe(bufnr)
                 "'<'/'>' sort",
             }, "  |  "),
             cursor_key = "list/" .. list.scope(),
+            -- the header answers to no key, so start on the first issue
+            cursor_home = 2,
         }
     end
 
@@ -227,43 +192,46 @@ local function describe(bufnr)
         title = #types == 1 and (" " .. config.title .. " ")
             or (" " .. config.title .. " [" .. type_label(type) .. "] "),
         footer = table.concat(parts, "  |  "),
-        cursor_key = "note/" .. type,
+        -- a note is a buffer of its own, and Neovim keeps its position
+        cursor_key = nil,
     }
 end
 
 -- ── Note buffers ────────────────────────────────────────────────────
 
---- Get or create the buffer of a note type
+--- Get or create the buffer of a note type.
+---
+--- A note that has a file *is* that file: Neovim then owns reading, writing,
+--- undo, reloading and the cursor position, and the local note of another
+--- project is another buffer by construction. Only the temporary note, which
+--- has nowhere to be written, stays a scratch buffer.
+---
+--- Either way the buffer carries a name, because :edit takes over an empty,
+--- nameless buffer instead of creating one, and plugins that open in the
+--- current window inherit that - oil.nvim on `-` would turn the note into a
+--- directory listing. bufadd, not nvim_create_buf: it returns the buffer that
+--- already carries the name, where set_name would fail with E95.
 ---@param type string
 ---@return number bufnr
 local function get_or_create_buffer(type)
-    local bufnr = buffers.find("note", type)
-    if bufnr then
+    local path = note_path(type)
+    local bufnr = vim.fn.bufadd(path or "scratch://note/temp")
+    if buffers.get(bufnr) then
         return bufnr
     end
 
-    -- A name keeps the buffer from being reused: :edit takes over an empty,
-    -- nameless buffer instead of creating one, and plugins that open in the
-    -- current window inherit that - oil.nvim on `-` would turn the note into
-    -- a directory listing. bufadd rather than nvim_create_buf, because it
-    -- returns the buffer already carrying the name if an older one survived a
-    -- plugin reload, where set_name would fail with E95.
-    bufnr = vim.fn.bufadd("scratch://note/" .. type)
     vim.fn.bufload(bufnr)
-    buffers.set(bufnr, { kind = "note", type = type })
+    buffers.set(bufnr, { kind = "note", type = type, path = path })
 
-    vim.bo[bufnr].buftype = "nofile"
-    vim.bo[bufnr].filetype = "markdown"
+    if path == nil then
+        vim.bo[bufnr].buftype = "nofile"
+        vim.bo[bufnr].swapfile = false
+        vim.bo[bufnr].filetype = "markdown"
+    end
     vim.bo[bufnr].buflisted = false
-    vim.bo[bufnr].swapfile = false
     vim.bo[bufnr].bufhidden = "hide"
 
     vim.treesitter.start(bufnr, "markdown")
-
-    local path = note_path(type)
-    if path then
-        load_file(bufnr, path)
-    end
 
     vim.keymap.set("n", "q", function()
         window.close()
@@ -284,12 +252,10 @@ local function get_or_create_buffer(type)
     return bufnr
 end
 
---- Buffer of the note to open with, refreshed from disk
+--- Buffer of the note to open with
 ---@return number bufnr
 local function note_buffer()
-    local bufnr = get_or_create_buffer(current_type)
-    reload_note(bufnr)
-    return bufnr
+    return get_or_create_buffer(current_type)
 end
 
 -- ── Public API ──────────────────────────────────────────────────────
@@ -302,12 +268,6 @@ end
 --- Toggle the issue list in the scratch window
 M.issues = function()
     window.show("list", list.buffer)
-    if window.is_open() then
-        list.refresh()
-        -- with nothing remembered, start on the first issue rather than the
-        -- header, which no key acts on
-        window.restore_cursor(2)
-    end
 end
 
 --- Show an issue file in the scratch window
@@ -329,9 +289,7 @@ local function cycle_type(offset)
     end
 
     -- Step away from the note on screen, whichever it is. Its contents are
-    -- written when the window swaps it out, so only the cursor is kept here.
-    window.remember_cursor()
-
+    -- written when the window swaps it out, and its cursor stays with it.
     local shown = buffers.get(window.current_buf())
     local from = shown and shown.type or current_type
 
@@ -344,13 +302,7 @@ local function cycle_type(offset)
     end
 
     current_type = types[((index - 1 + offset) % #types) + 1]
-
-    local bufnr = get_or_create_buffer(current_type)
-    window.swap_to(bufnr)
-
-    -- Reload from disk to pick up changes from other sessions
-    reload_note(bufnr)
-    window.restore_cursor()
+    window.swap_to(get_or_create_buffer(current_type))
 end
 
 --- Switch to the next note type
@@ -373,7 +325,6 @@ M.reset = function()
     end
 
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {})
-    window.forget_cursor("note/" .. info.type)
 end
 
 --- Close the scratch window
@@ -426,7 +377,7 @@ end
 function M.setup(opts)
     config = vim.tbl_deep_extend("force", {}, defaults, opts or {})
     paths.setup(config)
-    window.setup(config, describe)
+    window.setup(config, describe, release_issues)
 
     vim.api.nvim_create_user_command("ScratchToggle", M.toggle, {})
     vim.api.nvim_create_user_command("ScratchIssues", M.issues, {})
@@ -448,8 +399,14 @@ function M.setup(opts)
     -- unwritten buffer cancels the quit, so it is the one that keeps an issue
     -- edited and left behind from blocking :qa. VimLeavePre, which the manual
     -- calls the event "for really exiting", stays as the guarantee.
+    ---
+    --- Both are nested, because a :write from inside an autocommand raises no
+    --- write events of its own unless it is, and the rules below - where the
+    --- directory comes from, what an emptied note leaves behind - live in
+    --- exactly those events.
     vim.api.nvim_create_autocmd({ "ExitPre", "VimLeavePre" }, {
         group = setup_augroup,
+        nested = true,
         callback = save_all,
     })
 
@@ -457,18 +414,31 @@ function M.setup(opts)
     -- visible - left by C-o, swapped out of the window, or closed with it.
     vim.api.nvim_create_autocmd("BufWinLeave", {
         group = setup_augroup,
+        nested = true,
         callback = function(args)
-            local info = buffers.get(args.buf)
-            if info == nil then
+            if buffers.get(args.buf) == nil then
                 return
             end
 
-            if info.kind == "note" then
-                save_note(args.buf)
-            elseif info.kind == "issue" and vim.bo[args.buf].modified then
-                vim.api.nvim_buf_call(args.buf, function()
-                    vim.cmd("silent write")
-                end)
+            write_buffer(args.buf)
+        end,
+    })
+
+    -- The directory of a scope comes into being with the first file written
+    -- into it. :write does not create it the way writefile() used to, and a
+    -- note that was never touched is never written, so an untouched scope
+    -- still leaves nothing on disk.
+    vim.api.nvim_create_autocmd("BufWritePre", {
+        group = setup_augroup,
+        callback = function(args)
+            local info = buffers.get(args.buf)
+            if info == nil or info.path == nil then
+                return
+            end
+
+            local dir = vim.fn.fnamemodify(info.path, ":h")
+            if vim.fn.isdirectory(dir) == 0 then
+                vim.fn.mkdir(dir, "p")
             end
         end,
     })
@@ -496,22 +466,19 @@ function M.setup(opts)
         end,
     })
 
-    -- A new working directory means a new project: flush the note to the old
-    -- path before the root is re-resolved, or it would leak into the new one
+    -- A new working directory means a new project, and a new file for the
+    -- local note. That file names its own buffer, so nothing has to be
+    -- flushed or cleared here: the window swaps to the note of the project it
+    -- is in now, and the note it leaves is written on the way out.
     vim.api.nvim_create_autocmd("DirChanged", {
         group = setup_augroup,
         callback = function()
-            local bufnr = buffers.find("note", "local")
-            if bufnr then
-                save_file(bufnr, note_path("local"))
-                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {})
-                window.forget_cursor("note/local")
-            end
-
             paths.reset()
 
-            if bufnr and vim.fn.bufwinid(bufnr) ~= -1 then
-                reload_note(bufnr)
+            local shown = window.current_buf()
+            local info = shown and buffers.get(shown)
+            if info and info.kind == "note" and info.type == "local" then
+                window.swap_to(get_or_create_buffer("local"))
             end
         end,
     })

@@ -21,7 +21,7 @@ local M = {}
 ---@field kind string: "note" or "list" or "issue"
 ---@field type string|nil: note type, for kind "note"
 ---@field scope string|nil: issue scope, for kind "issue"
----@field path string|nil: file backing the buffer, for kind "issue"
+---@field path string|nil: file backing the buffer, nil when it has none
 
 ---@type table<number, scratch.BufferInfo>
 local entries = {}
@@ -49,6 +49,12 @@ function M.get(bufnr)
     return info
 end
 
+--- Forget a buffer
+---@param bufnr number
+function M.forget(bufnr)
+    entries[bufnr] = nil
+end
+
 --- Call fn(bufnr, info) for every live buffer of a kind
 ---@param kind string
 ---@param fn function
@@ -60,22 +66,6 @@ function M.each(kind, fn)
             else
                 entries[bufnr] = nil
             end
-        end
-    end
-end
-
---- The buffer registered for a kind and key, if it is still alive. There are
---- only ever a handful of entries, so a scan costs nothing.
----@param kind string
----@param key string|nil: note type or issue path
----@return number|nil
-function M.find(kind, key)
-    for bufnr, info in pairs(entries) do
-        if info.kind == kind and (info.type or info.path) == key then
-            if vim.api.nvim_buf_is_valid(bufnr) then
-                return bufnr
-            end
-            entries[bufnr] = nil
         end
     end
 end

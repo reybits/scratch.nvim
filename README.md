@@ -25,8 +25,9 @@ and a closed issue keeps a checkbox-style mark.*
 - **Global notes** — persisted across projects (`stdpath("data")/scratch.nvim/note.md`).
 - Cycle between note types with `S-Tab`.
 - Notes auto-save on close, type switch, and `VimLeavePre`.
-- An empty note keeps no file on disk: the file appears once the note has
-  content and is removed when the note is cleared.
+- A note is an ordinary markdown file buffer, so writing, undo, reloading and
+  the cursor position are Neovim's own. Its file appears the first time there
+  is something to write, so a note you never touched leaves nothing on disk.
 - **Issues** — one markdown file per issue, local to a project or global,
   listed in the same window and opened as ordinary file buffers.
 - Type, priority and status are changed straight from the list; the list is
@@ -184,9 +185,11 @@ list, the issue and the note behave as they do anywhere else. Buffers of the
 plugin are kept out of the buffer list, and everything it owns follows one
 rule: **a buffer is written when it stops being visible** — left with `C-o`,
 swapped out of the window, or closed with it — plus a final write when nvim
-quits. Which note a buffer is, and where it is stored, is a property of the
-buffer itself, so jumping between notes never saves one over another. Writing
-by hand with `:w` does no harm, it is simply not needed.
+quits. Issue buffers live no longer than the window: closing it writes them
+and lets them go, so they neither pile up nor stand between you and `:q`.
+Which note a buffer is, and where it is stored, is a property of the buffer
+itself, so jumping between notes never saves one over another. Writing by
+hand with `:w` does no harm, it is simply not needed.
 
 A jump can also land on a file that has nothing to do with notes or issues
 (`gF` from an issue into the code, `C-o` further back, `gd`). Such a file is
