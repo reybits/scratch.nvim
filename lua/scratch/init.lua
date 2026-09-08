@@ -181,7 +181,7 @@ local function describe(bufnr)
         return {
             kind = kind,
             title = " " .. config.title .. " [Issue] ",
-            footer = table.concat({ "'C-o' back", "saved on close" }, "  |  "),
+            footer = table.concat({ "'C-o' back", "saved when it leaves" }, "  |  "),
         }
     end
 

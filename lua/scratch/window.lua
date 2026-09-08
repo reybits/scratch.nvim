@@ -105,16 +105,21 @@ local function make_config(bufnr)
         col = col,
     }
 
+    -- A column of padding on either side of the text, and never wider than
+    -- the window. Centred by this width rather than by the length of the
+    -- text, or the padding would push the footer off centre.
+    local foo_width = math.min(#footer_text + 2, width)
+
     local cfg_foo = {
         relative = "editor",
         style = "minimal",
         zindex = 51,
         border = "none",
         focusable = false,
-        width = math.min(#footer_text + 2, width),
+        width = foo_width,
         height = 1,
         row = row + height + 1,
-        col = col + math.floor((width - #footer_text) / 2),
+        col = col + math.floor((width - foo_width) / 2),
     }
 
     return { cfg_wnd = cfg_wnd, cfg_foo = cfg_foo, footer_text = footer_text }

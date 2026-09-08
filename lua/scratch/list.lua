@@ -336,7 +336,7 @@ end
 ---@param entries scratch.Issue[]
 ---@param opts scratch.View
 ---@param width number
----@return string[] lines, table<number, scratch.Issue> line_map
+---@return string[] lines, table<number, scratch.Issue> line_map, table[] marks
 function M.render(entries, opts, width)
     local keep = filters[opts.filter]
     local shown = {}
@@ -368,7 +368,11 @@ function M.render(entries, opts, width)
     end
 
     if #shown == 0 then
-        table.insert(lines, indent .. "No " .. opts.filter .. " issues")
+        -- "No open issues" while a filter is on, plain "No issues" without
+        -- one: a view with no filter shows everything, and there is nothing
+        -- to name in that case
+        local what = opts.filter and (opts.filter .. " issues") or "issues"
+        table.insert(lines, indent .. "No " .. what)
     end
 
     return lines, line_map, marks
