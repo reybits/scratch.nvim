@@ -114,7 +114,7 @@ local cycles = {
 
 local priority_rank = { critical = 1, high = 2, normal = 3, low = 4 }
 
---- task ranks last because it is the default: everything unclassified is one
+--- task ranks last: being the default, it holds whatever was never classified
 local type_rank = { bug = 1, feature = 2, refactor = 3, task = 4 }
 
 --- Order by a ranked field, newest first among equals
