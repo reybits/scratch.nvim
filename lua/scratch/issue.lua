@@ -31,7 +31,7 @@ local defaults = {
 ---@class scratch.Issue
 ---@field path string
 ---@field id string: file name without extension, also the creation time
----@field type string: bug|feature|task
+---@field type string: bug|feature|refactor|task
 ---@field priority string: low|normal|high|critical
 ---@field status string: open|done
 ---@field title string
@@ -46,7 +46,7 @@ local keyword_types = {
     FIXIT = "bug",
     ISSUE = "bug",
     TODO = "task",
-    HACK = "task",
+    HACK = "refactor",
     PERF = "task",
     OPTIM = "task",
     WARN = "task",

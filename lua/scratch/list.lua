@@ -107,13 +107,15 @@ local columns = {
 
 --- Values a field cycles through, in order
 local cycles = {
-    type = { "bug", "feature", "task" },
+    type = { "bug", "feature", "refactor", "task" },
     priority = { "low", "normal", "high", "critical" },
     status = { "open", "done" },
 }
 
 local priority_rank = { critical = 1, high = 2, normal = 3, low = 4 }
-local type_rank = { bug = 1, feature = 2, task = 3 }
+
+--- task ranks last because it is the default: everything unclassified is one
+local type_rank = { bug = 1, feature = 2, refactor = 3, task = 4 }
 
 --- Order by a ranked field, newest first among equals
 ---@param field string
