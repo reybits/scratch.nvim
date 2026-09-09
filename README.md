@@ -177,7 +177,7 @@ opts = {
 | `q`       | Close the scratch window      |
 | `CR`      | Open the issue under the cursor|
 | `S-Tab`   | Switch between local and global|
-| `T`       | Cycle type: bug, feature, task|
+| `T`       | Cycle type: bug, feature, refactor, task|
 | `P`       | Cycle priority: low, normal, high, critical|
 | `S`       | Toggle status: open, done     |
 | `>` / `<` | Next / previous sort order    |
@@ -241,7 +241,7 @@ src/parser.c:412
 Free-form markdown below the title.
 ```
 
-- `type` — `bug`, `feature` or `task`
+- `type` — `bug`, `feature`, `refactor` or `task`
 - `priority` — `low`, `normal`, `high` or `critical`
 - `status` — `open` or `done`
 
@@ -311,9 +311,9 @@ A path with a line number, like `src/parser.c:412`, is what `gF` already
 understands, so it doubles as a jump back into the code.
 
 `:ScratchTask` reads the line under the cursor: if it is a todo comment, its
-keyword sets the type (`BUG`, `FIXME`, `ISSUE` give `bug`; `TODO`, `HACK`,
-`PERF` give `task`) and its text seeds the title. The location of the cursor is
-written into the body. The scoped form `BUG(ref):` is recognised as well; note
+keyword sets the type (`BUG`, `FIXME`, `ISSUE` give `bug`; `HACK` gives
+`refactor`; `TODO`, `PERF` give `task`) and its text seeds the title. The
+location of the cursor is written into the body. The scoped form `BUG(ref):` is recognised as well; note
 that [todo-comments.nvim](https://github.com/folke/todo-comments.nvim) does not
 highlight that form with its default `search.pattern` and `highlight.pattern`.
 
