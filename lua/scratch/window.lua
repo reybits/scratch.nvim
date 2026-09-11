@@ -35,6 +35,7 @@ local describe
 --- let go of whatever it was keeping for it
 local on_close
 
+---@type { winnr: integer|nil, foonr: integer|nil, foo_bufnr: integer|nil, prev_winnr: integer|nil, closing: boolean }
 local state = {
     winnr = nil,
     foonr = nil,
@@ -134,12 +135,14 @@ local function apply_win_opts(winnr)
     end
 end
 
+---@return integer
 local function footer_buffer()
     if state.foo_bufnr and vim.api.nvim_buf_is_valid(state.foo_bufnr) then
         return state.foo_bufnr
     end
-    state.foo_bufnr = vim.api.nvim_create_buf(false, true)
-    return state.foo_bufnr
+    local bufnr = vim.api.nvim_create_buf(false, true)
+    state.foo_bufnr = bufnr
+    return bufnr
 end
 
 ---@param text string: as sized by make_config, so window and contents agree

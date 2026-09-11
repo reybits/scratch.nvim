@@ -34,7 +34,7 @@ local defaults = {
 ---@field type string: bug|feature|refactor|task
 ---@field priority string: low|normal|high|critical
 ---@field status string: open|done
----@field title string
+---@field title string|nil: nil until the issue is given a heading
 ---@field updated number: file mtime, not a stored field
 
 --- todo-comments keywords mapped onto issue types, so a comment in the code
@@ -84,7 +84,9 @@ function M.parse(path)
     local issue = vim.tbl_extend("force", {}, defaults)
     issue.path = path
     issue.id = vim.fn.fnamemodify(path, ":t:r")
-    issue.title = issue.id
+    -- Left nil when the file carries no heading: an issue waiting to be named
+    -- is a fact about the store, and how to show it is the list's business
+    issue.title = nil
     -- Kept out of the frontmatter: the filesystem already tracks it
     issue.updated = vim.fn.getftime(path)
 
