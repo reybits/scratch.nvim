@@ -161,15 +161,16 @@ end
 ---@return scratch.Chrome
 local function describe(bufnr)
     local info = buffers.get(bufnr)
-    local kind = info and info.kind or "foreign"
 
-    if kind == "list" then
+    if info and info.kind == "list" then
         return {
-            kind = kind,
+            kind = "list",
             title = " " .. config.title .. " [Issues: " .. type_label(info.scope) .. "] ",
             footer = table.concat({
                 "'q' close",
                 "'CR' open",
+                "'A' new",
+                "'D' delete",
                 "'S-Tab' scope",
                 "'T'ype/'P'riority/'S'tatus",
                 "'<'/'>' sort",
@@ -177,16 +178,16 @@ local function describe(bufnr)
         }
     end
 
-    if kind == "issue" then
+    if info and info.kind == "issue" then
         return {
-            kind = kind,
+            kind = "issue",
             title = " " .. config.title .. " [Issue] ",
             footer = table.concat({ "'C-o' back", "saved when it leaves" }, "  |  "),
         }
     end
 
-    -- A foreign buffer is on its way out; it only needs a kind
-    local type = info and info.type or current_type
+    -- A note, or a foreign buffer on its way out: that one only needs a kind
+    local type = (info and info.kind == "note") and info.type or current_type
     local types = enabled_types()
     local parts = { "'q' close", "'R' reset" }
     if #types > 1 then
@@ -194,7 +195,7 @@ local function describe(bufnr)
     end
 
     return {
-        kind = kind,
+        kind = info and info.kind or "foreign",
         title = #types == 1 and (" " .. config.title .. " ")
             or (" " .. config.title .. " [" .. type_label(type) .. "] "),
         footer = table.concat(parts, "  |  "),
@@ -294,8 +295,9 @@ local function cycle_type(offset)
 
     -- Step away from the note on screen, whichever it is. Its contents are
     -- written when the window swaps it out, and its cursor stays with it.
-    local shown = buffers.get(window.current_buf())
-    local from = shown and shown.type or current_type
+    local bufnr = window.current_buf()
+    local shown = bufnr and buffers.get(bufnr)
+    local from = (shown and shown.kind == "note") and shown.type or current_type
 
     local index = 1
     for i, type in ipairs(types) do
@@ -323,7 +325,11 @@ end
 --- from any remembered type: the two part ways as soon as the user jumps.
 M.reset = function()
     local bufnr = window.current_buf()
-    local info = bufnr and buffers.get(bufnr)
+    if bufnr == nil then
+        return
+    end
+
+    local info = buffers.get(bufnr)
     if info == nil or info.kind ~= "note" then
         return
     end
@@ -338,6 +344,10 @@ end
 
 --- Create an issue and open it. The line under the cursor seeds type and
 --- title when it is a todo comment, and its location goes into the body.
+---
+--- Nothing is asked for: an issue without a name is opened on its heading and
+--- named there, which is also what `A` does in the list. One way to write an
+--- issue, whichever end it was started from.
 ---@param scope string: "local" or "global"
 ---@param title string|nil
 M.task = function(scope, title)
@@ -351,29 +361,11 @@ M.task = function(scope, title)
         table.insert(body, file .. ":" .. vim.api.nvim_win_get_cursor(0)[1])
     end
 
-    local function create(text)
-        if text == nil or text == "" then
-            return
-        end
-
-        list.open(issue.create(scope, {
-            type = hint and hint.type,
-            title = text,
-            body = body,
-        }))
-
-        -- Start at the end, where the body is written. Not `normal! G`: that
-        -- is a jump, and its jumplist entry would make the first C-o land in
-        -- this very buffer instead of going back.
-        local opened = vim.api.nvim_get_current_buf()
-        pcall(vim.api.nvim_win_set_cursor, 0, { vim.api.nvim_buf_line_count(opened), 0 })
-    end
-
-    if title and title ~= "" then
-        create(title)
-    else
-        vim.ui.input({ prompt = "Issue title: ", default = hint and hint.title or "" }, create)
-    end
+    list.new(scope, {
+        type = hint and hint.type,
+        title = (title ~= nil and title ~= "") and title or (hint and hint.title),
+        body = body,
+    })
 end
 
 --- Setup the plugin

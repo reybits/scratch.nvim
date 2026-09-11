@@ -39,13 +39,27 @@ end
 ---@return string
 local function cell_date(entry, sort)
     if sort == "updated" and entry.updated and entry.updated > 0 then
-        return os.date("%Y-%m-%d", entry.updated)
+        -- os.date returns a table only when the format starts with "*t"
+        return os.date("%Y-%m-%d", entry.updated) --[[@as string]]
     end
     return entry.id:sub(1, 10)
 end
 
+--- An issue still waiting for its heading shows the time it was made, so that
+--- two of them are told apart while they are both unnamed. The time only: the
+--- date column beside it already carries the day.
+---@param entry scratch.Issue
+---@return string
 local function cell_title(entry)
-    return entry.title
+    if entry.title then
+        return entry.title
+    end
+
+    local hour, minute, second = entry.id:match("T(%d+)%-(%d+)%-(%d+)")
+    if hour == nil then
+        return "(untitled) " .. entry.id
+    end
+    return ("(untitled) %s:%s:%s"):format(hour, minute, second)
 end
 
 --- One colour axis, and it is priority: type is already legible as a word,
@@ -80,11 +94,18 @@ local function hl_date()
     return "ScratchIssueDate"
 end
 
+---@class scratch.Column
+---@field header string
+---@field width number: 0 means "take whatever is left"
+---@field format fun(entry: scratch.Issue, sort: string): string
+---@field hl (fun(entry: scratch.Issue): string|nil)|nil
+---@field sorts table<string, string>|nil
+
 --- Columns are data, so changing what a cell looks like stays a one-liner.
---- A width of 0 means "take whatever is left".
 --- `sorts` maps the orders a column stands for onto the name it takes while
 --- that order is in effect. The active header is wrapped in angle brackets,
 --- which name the keys that move the order; widths leave room for them.
+---@type scratch.Column[]
 local columns = {
     { header = " ", width = 2, format = cell_status },
     { header = "Type", width = 9, format = cell_type, sorts = { type = "Type" } },
@@ -147,8 +168,9 @@ local function by_updated(a, b)
 end
 
 local function by_title(a, b)
-    if a.title ~= b.title then
-        return a.title < b.title
+    local left, right = cell_title(a), cell_title(b)
+    if left ~= right then
+        return left < right
     end
     return a.id > b.id
 end
@@ -197,8 +219,9 @@ local state = {
 
     --- One record per issue directory, because that is what a list shows: the
     --- local list of another project is another list, with rows and a cursor
-    --- of its own, and a single buffer could not hold two of them.
-    ---@type table<string, { bufnr: number, line_map: table }>
+    --- of its own, and a single buffer could not hold two of them. `fresh` is
+    --- true until the list has been entered once.
+    ---@type table<string, { bufnr: integer, line_map: table, fresh: boolean }>
     lists = {},
 }
 
@@ -489,14 +512,75 @@ function M.open(path)
     window.swap_to(bufnr)
 end
 
+--- Create an issue and show it, with the cursor left where the work is: on
+--- the heading while the issue has none, at the end of the body once it has.
+--- The name is typed into the card itself rather than asked for beforehand,
+--- so there is one way to write an issue however it was started.
+---@param scope string
+---@param fields table|nil: type, priority, title, body
+---@return string path
+function M.new(scope, fields)
+    fields = fields or {}
+    local path = issue.create(scope, fields)
+    M.open(path)
+
+    local bufnr = vim.api.nvim_get_current_buf()
+    if fields.title and fields.title ~= "" then
+        -- Not `normal! G`: that is a jump, and its jumplist entry would make
+        -- the first C-o land in this very buffer instead of going back.
+        pcall(vim.api.nvim_win_set_cursor, 0, { vim.api.nvim_buf_line_count(bufnr), 0 })
+        return path
+    end
+
+    for row, line in ipairs(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)) do
+        if line:match("^#%s") then
+            pcall(vim.api.nvim_win_set_cursor, 0, { row, math.max(#line - 1, 0) })
+            break
+        end
+    end
+
+    return path
+end
+
+--- The issue the cursor stands on, or nil on the header
+---@return scratch.Issue|nil
+local function entry_under_cursor()
+    local shown = record(vim.api.nvim_get_current_buf())
+    return shown and shown.line_map[vim.api.nvim_win_get_cursor(0)[1]]
+end
+
 --- Open the issue under the cursor
 local function open_entry()
-    local shown = record(vim.api.nvim_get_current_buf())
-    local entry = shown and shown.line_map[vim.api.nvim_win_get_cursor(0)[1]]
+    local entry = entry_under_cursor()
+    if entry then
+        M.open(entry.path)
+    end
+end
+
+--- Delete the issue under the cursor, file and all. Asked about first: this
+--- is the one key here that destroys something, and the file is the issue.
+local function delete_entry()
+    local bufnr = vim.api.nvim_get_current_buf()
+    local entry = entry_under_cursor()
     if entry == nil then
         return
     end
-    M.open(entry.path)
+
+    if vim.fn.confirm("Delete " .. cell_title(entry) .. "?", "&Yes\n&No", 2) ~= 1 then
+        return
+    end
+
+    -- Force, because the answer above was about the issue, not about the
+    -- buffer: a copy left open and edited elsewhere must not keep the file
+    -- alive after the user said to remove it.
+    local shown_in = vim.fn.bufnr(entry.path)
+    if shown_in ~= -1 then
+        buffers.forget(shown_in)
+        pcall(vim.api.nvim_buf_delete, shown_in, { force = true })
+    end
+
+    vim.fn.delete(entry.path)
+    M.refresh(bufnr)
 end
 
 --- Re-read the file's buffer after the store changed it on disk.
@@ -537,8 +621,7 @@ end
 local function cycle_field(field)
     local bufnr = vim.api.nvim_get_current_buf()
     local row = vim.api.nvim_win_get_cursor(0)[1]
-    local shown = record(bufnr)
-    local entry = shown and shown.line_map[row]
+    local entry = entry_under_cursor()
     if entry == nil then
         return
     end
@@ -610,6 +693,12 @@ function M.buffer()
 
         vim.keymap.set("n", "<CR>", open_entry, { buffer = bufnr, noremap = true, silent = true })
 
+        vim.keymap.set("n", "A", function()
+            M.new(scope)
+        end, { buffer = bufnr, noremap = true, silent = true })
+
+        vim.keymap.set("n", "D", delete_entry, { buffer = bufnr, noremap = true, silent = true })
+
         vim.keymap.set("n", "q", window.close, { buffer = bufnr, noremap = true, silent = true })
 
         -- Tab is the same keycode as C-i: mapping it would eat the jump forward
@@ -645,7 +734,7 @@ function M.buffer()
                 -- The header answers to no key, so a list is entered on its
                 -- first issue. Only the first time: after that the position
                 -- is the one the buffer was left on.
-                if shown.fresh then
+                if shown and shown.fresh then
                     shown.fresh = false
                     pcall(vim.api.nvim_win_set_cursor, 0, { 2, 0 })
                 end

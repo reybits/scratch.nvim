@@ -159,8 +159,9 @@ opts = {
   to what it names, so `:ScratchIssues` on an open note shows the list rather
   than closing anything.
 - `:ScratchTask [title]` — Create an issue in the current project and open it.
-  With `!` the issue goes to the global scope instead. Without a title, one is
-  asked for.
+  With `!` the issue goes to the global scope instead. Nothing is asked for:
+  an issue that has no name yet opens on its empty heading, which is where you
+  write one.
 
 ### Keymaps (inside the scratch window)
 
@@ -176,6 +177,8 @@ opts = {
 |-----------|-------------------------------|
 | `q`       | Close the scratch window      |
 | `CR`      | Open the issue under the cursor|
+| `A`       | New issue, opened on its heading|
+| `D`       | Delete the issue under the cursor, after confirming|
 | `S-Tab`   | Switch between local and global|
 | `T`       | Cycle type: bug, feature, refactor, task|
 | `P`       | Cycle priority: low, normal, high, critical|
@@ -247,9 +250,11 @@ Free-form markdown below the title.
 
 Only these fields and the first `#` heading are read; everything else in the
 file is left alone. Missing fields fall back to `task`, `normal` and `open`,
-so a file written by hand still shows up in the list. Fields can be changed
-from the list with `T`, `P` and `S`, which rewrite that one frontmatter line
-and leave the rest of the file alone, or by editing the file by hand.
+so a file written by hand still shows up in the list. An issue with no heading
+yet is listed as `(untitled)` with the time it was made, so two of them are
+still told apart. Fields can be changed from the list with `T`, `P` and `S`,
+which rewrite that one frontmatter line and leave the rest of the file alone,
+or by editing the file by hand.
 
 Such a change repaints only its own row. The filter is applied when the list
 is built, not while you are working in it, so closing an issue leaves it in

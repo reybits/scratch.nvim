@@ -17,12 +17,25 @@
 
 local M = {}
 
----@class scratch.BufferInfo
----@field kind string: "note" or "list" or "issue"
----@field type string|nil: note type, for kind "note"
----@field scope string|nil: issue scope, for kind "list"
----@field dir string|nil: directory listed, for kind "list"
----@field path string|nil: file backing the buffer, nil when it has none
+--- Three shapes rather than one with everything optional: a list always has
+--- a scope and a directory, an issue always has a file, and saying so is what
+--- lets `info.kind == "list"` be enough to reach `info.scope`.
+
+---@class scratch.NoteInfo
+---@field kind "note"
+---@field type string
+---@field path string|nil: nil for the temporary note, which has no file
+
+---@class scratch.ListInfo
+---@field kind "list"
+---@field scope string
+---@field dir string
+
+---@class scratch.IssueInfo
+---@field kind "issue"
+---@field path string
+
+---@alias scratch.BufferInfo scratch.NoteInfo|scratch.ListInfo|scratch.IssueInfo
 
 ---@type table<number, scratch.BufferInfo>
 local entries = {}
