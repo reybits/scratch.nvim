@@ -55,11 +55,14 @@ local function cell_title(entry)
         return entry.title
     end
 
-    local hour, minute, second = entry.id:match("T(%d+)%-(%d+)%-(%d+)")
-    if hour == nil then
+    local time = entry.id:match("T(.+)$")
+    if time == nil then
         return "(untitled) " .. entry.id
     end
-    return ("(untitled) %s:%s:%s"):format(hour, minute, second)
+
+    -- 18-40-15 reads as a time; what a second issue made in the same second
+    -- carries beyond it is what tells the two apart, so it stays as it is
+    return "(untitled) " .. (time:gsub("%-", ":", 2))
 end
 
 --- One colour axis, and it is priority: type is already legible as a word,
