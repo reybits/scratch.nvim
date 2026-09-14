@@ -36,6 +36,8 @@ and a closed issue keeps a checkbox-style mark.*
   has a list of its own, remembering the row you left it on.
 - Type, priority and status are changed straight from the list; the list is
   ordered by any of its columns, and priority is colour-coded.
+- Any number of tags per issue, or none — they say what it belongs to, and
+  stand in front of its description in the list.
 - Nothing of the plugin's own ends up in the buffer list, and a file that
   belongs to neither notes nor issues is never left inside the window.
 - Notes and issues are written whenever they leave the screen, so nothing is
@@ -235,6 +237,7 @@ no counter and the directory sorts chronologically on its own.
 type: bug
 priority: high
 status: open
+tags: parser,io
 ---
 
 # Parser drops the last line of a file
@@ -247,6 +250,22 @@ Free-form markdown below the title.
 - `type` — `bug`, `feature`, `refactor` or `task`
 - `priority` — `low`, `normal`, `high` or `critical`
 - `status` — `open` or `done`
+- `tags` — any number of them, comma-separated, or none at all
+
+Tags say what an issue belongs to — a module, a subsystem, a platform — and
+are written by hand in the card, since their values are yours rather than a
+fixed set. They open the description in the list, dimmed:
+
+```text
+    Type     Priority   Created     Description
+  x BUG      HIGH       2026-09-11  [age, gui] guiText: no size without one
+    TASK     NORMAL     2026-09-11  pugixml 1.16
+```
+
+The list is not ordered by them: a tag names a group, and an issue can be in
+several at once, so ordering by "the first one alphabetically" would say less
+than it seems. Ordering by description follows the description, not the tags
+standing in front of it.
 
 Only these fields and the first `#` heading are read; everything else in the
 file is left alone. Missing fields fall back to `task`, `normal` and `open`,
@@ -303,6 +322,7 @@ thing to follow instead of two competing ones.
 | `ScratchIssueLow` | priority `low` | `Comment` |
 | `ScratchIssueDate` | the date column | `Comment` |
 | `ScratchIssueDone` | a closed issue, whole row | `Comment` |
+| `ScratchIssueTags` | the tags before a description | `Comment` |
 
 Priority `normal` is deliberately left plain. All groups are defined with
 `default = true`, so any definition of your own wins:

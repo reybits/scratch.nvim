@@ -34,8 +34,24 @@ local defaults = {
 ---@field type string: bug|feature|refactor|task
 ---@field priority string: low|normal|high|critical
 ---@field status string: open|done
+---@field tags string[]: what the issue belongs to, empty when it says nothing
 ---@field title string|nil: nil until the issue is given a heading
 ---@field updated number: file mtime, not a stored field
+
+--- Split a frontmatter list: "age, gui" gives { "age", "gui" }. The one field
+--- that is not a single value, kept flat so the file stays plain key: value.
+---@param value string
+---@return string[]
+local function split_tags(value)
+    local tags = {}
+    for tag in value:gmatch("[^,]+") do
+        tag = vim.trim(tag)
+        if tag ~= "" then
+            table.insert(tags, tag)
+        end
+    end
+    return tags
+end
 
 --- todo-comments keywords mapped onto issue types, so a comment in the code
 --- can seed an issue. Keys follow that plugin's default keyword set.
@@ -84,6 +100,7 @@ function M.parse(path)
     local issue = vim.tbl_extend("force", {}, defaults)
     issue.path = path
     issue.id = vim.fn.fnamemodify(path, ":t:r")
+    issue.tags = {}
     -- Left nil when the file carries no heading: an issue waiting to be named
     -- is a fact about the store, and how to show it is the list's business
     issue.title = nil
@@ -100,7 +117,9 @@ function M.parse(path)
                 break
             end
             local key, value = lines[i]:match("^(%w+):%s*(.-)%s*$")
-            if key and defaults[key] then
+            if key == "tags" then
+                issue.tags = split_tags(value)
+            elseif key and defaults[key] then
                 issue[key] = value
             end
         end
@@ -166,7 +185,7 @@ end
 
 --- Write a new issue
 ---@param scope string
----@param fields table: type, priority, title, body
+---@param fields table: type, priority, tags, title, body
 ---@return string path
 function M.create(scope, fields)
     local dir = M.dir(scope)
@@ -189,6 +208,9 @@ function M.create(scope, fields)
         "type: " .. (fields.type or defaults.type),
         "priority: " .. (fields.priority or defaults.priority),
         "status: " .. defaults.status,
+        -- Written even when empty: the card is where fields are edited by
+        -- hand, and a field that is never shown is a field nobody knows about
+        "tags: " .. table.concat(fields.tags or {}, ","),
         "---",
         "",
         "# " .. (fields.title or ""),

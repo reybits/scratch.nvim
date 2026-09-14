@@ -45,12 +45,12 @@ local function cell_date(entry, sort)
     return entry.id:sub(1, 10)
 end
 
---- An issue still waiting for its heading shows the time it was made, so that
---- two of them are told apart while they are both unnamed. The time only: the
---- date column beside it already carries the day.
+--- What an issue is called: its heading, or - while it has none - the time it
+--- was made, so that two unnamed ones are told apart. The time only: the date
+--- column beside it already carries the day.
 ---@param entry scratch.Issue
 ---@return string
-local function cell_title(entry)
+local function name_of(entry)
     if entry.title then
         return entry.title
     end
@@ -63,6 +63,22 @@ local function cell_title(entry)
     -- 18-40-15 reads as a time; what a second issue made in the same second
     -- carries beyond it is what tells the two apart, so it stays as it is
     return "(untitled) " .. (time:gsub("%-", ":", 2))
+end
+
+--- Tags as they stand in front of the description, empty when there are none
+---@param entry scratch.Issue
+---@return string
+local function tag_prefix(entry)
+    if entry.tags == nil or #entry.tags == 0 then
+        return ""
+    end
+    return "[" .. table.concat(entry.tags, ", ") .. "] "
+end
+
+---@param entry scratch.Issue
+---@return string
+local function cell_title(entry)
+    return tag_prefix(entry) .. name_of(entry)
 end
 
 --- One colour axis, and it is priority: type is already legible as a word,
@@ -84,6 +100,7 @@ local highlight_links = {
     ScratchIssueLow = "Comment",
     ScratchIssueDate = "Comment",
     ScratchIssueDone = "Comment",
+    ScratchIssueTags = "Comment",
 }
 
 ---@param entry scratch.Issue
@@ -170,8 +187,10 @@ local function by_updated(a, b)
     return a.id > b.id
 end
 
+--- By what the issue is called, not by what its row starts with: the tags in
+--- front of the description would otherwise quietly order the column by them
 local function by_title(a, b)
-    local left, right = cell_title(a), cell_title(b)
+    local left, right = name_of(a), name_of(b)
     if left ~= right then
         return left < right
     end
@@ -315,6 +334,21 @@ local function row_marks(entry, spans, line, row)
             })
         end
     end
+
+    -- The tags open the description rather than hold a column of their own,
+    -- and they are dimmed so the eye runs along the descriptions and takes
+    -- them in beside it.
+    local tags = #tag_prefix(entry)
+    local from = spans[#columns].from
+    if tags > 0 and from < #line then
+        table.insert(marks, {
+            row = row,
+            from = from,
+            to = math.min(from + tags, #line),
+            group = "ScratchIssueTags",
+        })
+    end
+
     return marks
 end
 
