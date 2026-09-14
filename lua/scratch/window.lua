@@ -65,6 +65,10 @@ end
 
 -- ── keys ────────────────────────────────────────────────────────────
 
+--- The key every buffer with keys also answers to, listed among them so that
+--- "every key" is true of what the help shows
+local help_key = { key = "?", desc = "show this list" }
+
 --- Hang a buffer's keys on it. The same table becomes the footer and the
 --- help, so what a key does and what it is said to do cannot drift apart.
 ---@param bufnr number
@@ -74,7 +78,7 @@ function M.bind(bufnr, keys)
         vim.keymap.set("n", entry.key, entry.run, { buffer = bufnr, noremap = true, silent = true })
     end
 
-    vim.keymap.set("n", "?", function()
+    vim.keymap.set("n", help_key.key, function()
         M.help(bufnr)
     end, { buffer = bufnr, noremap = true, silent = true })
 end
@@ -414,10 +418,16 @@ end
 --- has no business occupying the screen the rest of the time.
 ---@param bufnr number: the buffer whose keys to show
 function M.help(bufnr)
-    local keys = describe(bufnr).keys
-    if keys == nil or #keys == 0 then
+    local declared = describe(bufnr).keys
+    if declared == nil or #declared == 0 then
         return
     end
+
+    -- Pressing ? while it is up would otherwise strand the first list: the
+    -- pending dismissal belongs to whatever state.help holds by then.
+    M.dismiss_help()
+
+    local keys = vim.list_extend(vim.list_slice(declared, 1), { help_key })
 
     local widest = 0
     for _, entry in ipairs(keys) do
@@ -435,6 +445,12 @@ function M.help(bufnr)
     vim.api.nvim_buf_set_lines(help_buf, 0, -1, false, lines)
     vim.bo[help_buf].modifiable = false
 
+    -- A column of padding on either side, centred by that full width rather
+    -- than by the text - and never off the screen, which nvim_open_win would
+    -- refuse, nor wider than there is room for.
+    local box = math.min(width + 2, vim.o.columns)
+    local rows = math.min(#lines, vim.o.lines - 2)
+
     -- Drawn over the window without taking the focus. Taking it would leave
     -- the window behind, and with close_on_leave that is the window closing
     -- itself - reading the keys would cost you what you were reading them for.
@@ -448,10 +464,10 @@ function M.help(bufnr)
             zindex = 60,
             title = " Keys ",
             title_pos = "center",
-            width = width + 2,
-            height = #lines,
-            row = math.floor((vim.o.lines - #lines) / 2) - 1,
-            col = math.floor((vim.o.columns - width) / 2),
+            width = box,
+            height = rows,
+            row = math.max(math.floor((vim.o.lines - rows) / 2) - 1, 0),
+            col = math.max(math.floor((vim.o.columns - box) / 2), 0),
         }),
     }
 

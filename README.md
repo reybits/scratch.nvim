@@ -194,10 +194,16 @@ opts = {
 
 The footer names only what it has room for, starting with `?` — it is cut to
 the width of the window, so the key that leads to the rest is the one that
-must survive the cut. `?` opens the full list over the window and closes on
-`q`, `Esc`, `?`, `CR`, or as soon as the focus goes elsewhere. Each buffer
-declares its keys once, and the footer, the help and the keymaps are that one
-declaration read three ways.
+must survive the cut.
+
+`?` draws the full list over the window **without taking the focus**: taking
+it would leave the window behind, and with `close_on_leave` that is the window
+closing itself. The next key you press takes the list away and then does what
+it always does, so `?` then `#` narrows by tag in two keystrokes. Pressing `?`
+again simply closes it.
+
+Each buffer declares its keys once, and the footer, the help and the keymaps
+are that one declaration read three ways.
 
 `Tab` is deliberately left alone: it is the same keycode as `C-i`, and mapping
 it would break jumping forward through the jumplist.
