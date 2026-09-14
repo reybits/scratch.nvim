@@ -20,10 +20,18 @@
 
 local M = {}
 
+---@class scratch.Key
+---@field key string
+---@field desc string
+---@field run function
+---@field brief string|nil: short label for the footer; nil keeps the key
+--- in the help only
+
 ---@class scratch.Chrome
 ---@field title string
----@field footer string
 ---@field kind string
+---@field keys scratch.Key[]|nil: what the buffer answers to
+---@field footer string|nil: said instead of the keys, for a buffer with none
 
 ---@type scratch.Config
 local config
@@ -35,13 +43,14 @@ local describe
 --- let go of whatever it was keeping for it
 local on_close
 
----@type { winnr: integer|nil, foonr: integer|nil, foo_bufnr: integer|nil, prev_winnr: integer|nil, closing: boolean }
+---@type { winnr: integer|nil, foonr: integer|nil, foo_bufnr: integer|nil, prev_winnr: integer|nil, closing: boolean, help: { winnr: integer, bufnr: integer }|nil }
 local state = {
     winnr = nil,
     foonr = nil,
     foo_bufnr = nil,
     prev_winnr = nil,
     closing = false,
+    help = nil,
 }
 
 --- Install the configuration, the buffer describer and the close hook
@@ -52,6 +61,57 @@ function M.setup(cfg, describer, closer)
     config = cfg
     describe = describer
     on_close = closer
+end
+
+-- ── keys ────────────────────────────────────────────────────────────
+
+--- The key every buffer with keys also answers to, listed among them so that
+--- "every key" is true of what the help shows
+local help_key = { key = "?", desc = "show this list" }
+
+--- Hang a buffer's keys on it. The same table becomes the footer and the
+--- help, so what a key does and what it is said to do cannot drift apart.
+---@param bufnr number
+---@param keys scratch.Key[]
+function M.bind(bufnr, keys)
+    for _, entry in ipairs(keys) do
+        vim.keymap.set("n", entry.key, entry.run, { buffer = bufnr, noremap = true, silent = true })
+    end
+
+    vim.keymap.set("n", help_key.key, function()
+        M.help(bufnr)
+    end, { buffer = bufnr, noremap = true, silent = true })
+end
+
+--- A key as it is read rather than as it is mapped: the angle brackets are
+--- syntax for vim.keymap.set, not something to show anyone.
+---@param key string
+---@return string
+local function pretty(key)
+    -- only when they wrap a name: `>` and `<` are keys in their own right
+    return key:match("^<(.+)>$") or key
+end
+
+--- What the footer says: the keys marked brief, and the door to the rest.
+--- The full list belongs in the help - a footer long enough to hold it would
+--- be cut off by the window anyway.
+---@param chrome scratch.Chrome
+---@return string
+local function footer_of(chrome)
+    if chrome.keys == nil then
+        return chrome.footer or ""
+    end
+
+    -- `?` first, because it is the one that survives the cut: the footer is
+    -- trimmed to the window, and what is left has to say where the rest is
+    local parts = { "? keys" }
+    for _, entry in ipairs(chrome.keys) do
+        if entry.brief then
+            table.insert(parts, pretty(entry.key) .. " " .. entry.brief)
+        end
+    end
+
+    return table.concat(parts, " | ")
 end
 
 -- ── geometry ────────────────────────────────────────────────────────
@@ -88,7 +148,7 @@ local function make_config(bufnr)
     -- The footer window is sized by its text, so a long hint list would hang
     -- off the screen on a narrow terminal. One column goes to the leading
     -- space update_footer adds.
-    local footer_text = chrome.footer
+    local footer_text = footer_of(chrome)
     if #footer_text + 1 > width then
         footer_text = footer_text:sub(1, width - 1)
     end
@@ -318,6 +378,8 @@ function M.close()
     end
     state.closing = true
 
+    M.dismiss_help()
+
     pcall(vim.api.nvim_win_close, state.winnr, true)
     state.winnr = nil
 
@@ -331,6 +393,90 @@ function M.close()
     if on_close then
         on_close()
     end
+end
+
+-- ── help ────────────────────────────────────────────────────────────
+
+local help_namespace = vim.api.nvim_create_namespace("scratch.nvim/help")
+
+--- Take the key list off the screen, however it got dismissed
+function M.dismiss_help()
+    if state.help == nil then
+        return
+    end
+
+    pcall(vim.api.nvim_win_close, state.help.winnr, true)
+    pcall(vim.api.nvim_buf_delete, state.help.bufnr, { force = true })
+    state.help = nil
+    vim.on_key(nil, help_namespace)
+end
+
+--- Every key of a buffer, laid out over the window that holds it.
+---
+--- Its own float rather than a taller footer: the full list is three times
+--- what the footer can show, and it is read once and then not again, so it
+--- has no business occupying the screen the rest of the time.
+---@param bufnr number: the buffer whose keys to show
+function M.help(bufnr)
+    local declared = describe(bufnr).keys
+    if declared == nil or #declared == 0 then
+        return
+    end
+
+    -- Pressing ? while it is up would otherwise strand the first list: the
+    -- pending dismissal belongs to whatever state.help holds by then.
+    M.dismiss_help()
+
+    local keys = vim.list_extend(vim.list_slice(declared, 1), { help_key })
+
+    local widest = 0
+    for _, entry in ipairs(keys) do
+        widest = math.max(widest, #pretty(entry.key))
+    end
+
+    local lines, width = {}, 0
+    for _, entry in ipairs(keys) do
+        local line = ("  %-" .. widest .. "s  %s"):format(pretty(entry.key), entry.desc)
+        table.insert(lines, line)
+        width = math.max(width, #line)
+    end
+
+    local help_buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(help_buf, 0, -1, false, lines)
+    vim.bo[help_buf].modifiable = false
+
+    -- A column of padding on either side, centred by that full width rather
+    -- than by the text - and never off the screen, which nvim_open_win would
+    -- refuse, nor wider than there is room for.
+    local box = math.min(width + 2, vim.o.columns)
+    local rows = math.min(#lines, vim.o.lines - 2)
+
+    -- Drawn over the window without taking the focus. Taking it would leave
+    -- the window behind, and with close_on_leave that is the window closing
+    -- itself - reading the keys would cost you what you were reading them for.
+    state.help = {
+        bufnr = help_buf,
+        winnr = vim.api.nvim_open_win(help_buf, false, {
+            relative = "editor",
+            border = config.border,
+            style = "minimal",
+            focusable = false,
+            zindex = 60,
+            title = " Keys ",
+            title_pos = "center",
+            width = box,
+            height = rows,
+            row = math.max(math.floor((vim.o.lines - rows) / 2) - 1, 0),
+            col = math.max(math.floor((vim.o.columns - box) / 2), 0),
+        }),
+    }
+
+    -- The next key dismisses it and then does what it always does: the list
+    -- is read once, and holding it open would only be in the way. Scheduled,
+    -- because closing a window from inside the input handler is not the place.
+    vim.on_key(function()
+        vim.schedule(M.dismiss_help)
+    end, help_namespace)
 end
 
 return M

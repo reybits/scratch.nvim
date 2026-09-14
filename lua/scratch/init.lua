@@ -154,6 +154,28 @@ end
 
 -- ── What the window shows ───────────────────────────────────────────
 
+--- What a note answers to. The switch key is offered only when there is
+--- something to switch to.
+---@return scratch.Key[]
+local function note_keys()
+    local keys = {
+        { key = "q", desc = "close the window", brief = "close", run = window.close },
+        { key = "R", desc = "clear the note on screen", brief = "reset", run = M.reset },
+    }
+
+    if #enabled_types() > 1 then
+        -- Tab is the same keycode as C-i, so mapping it would eat the jumplist
+        table.insert(keys, {
+            key = "<S-Tab>",
+            desc = "switch to the next note",
+            brief = "switch",
+            run = M.next_type,
+        })
+    end
+
+    return keys
+end
+
 --- Everything the window needs about a buffer: how to name it and what to
 --- offer in the footer. Derived from the registry, so it always describes
 --- what is on screen.
@@ -166,19 +188,12 @@ local function describe(bufnr)
         return {
             kind = "list",
             title = " " .. config.title .. " [Issues: " .. type_label(info.scope) .. "] ",
-            footer = table.concat({
-                "'q' close",
-                "'CR' open",
-                "'A' new",
-                "'D' delete",
-                "'S-Tab' scope",
-                "'T'ype/'P'riority/'S'tatus",
-                "'<'/'>' sort",
-            }, "  |  "),
+            keys = list.keys(),
         }
     end
 
     if info and info.kind == "issue" then
+        -- An issue is an ordinary file buffer and answers to no keys of ours
         return {
             kind = "issue",
             title = " " .. config.title .. " [Issue] ",
@@ -189,16 +204,12 @@ local function describe(bufnr)
     -- A note, or a foreign buffer on its way out: that one only needs a kind
     local type = (info and info.kind == "note") and info.type or current_type
     local types = enabled_types()
-    local parts = { "'q' close", "'R' reset" }
-    if #types > 1 then
-        table.insert(parts, "'S-Tab' switch note")
-    end
 
     return {
         kind = info and info.kind or "foreign",
         title = #types == 1 and (" " .. config.title .. " ")
             or (" " .. config.title .. " [" .. type_label(type) .. "] "),
-        footer = table.concat(parts, "  |  "),
+        keys = note_keys(),
     }
 end
 
@@ -238,21 +249,7 @@ local function get_or_create_buffer(type)
 
     vim.treesitter.start(bufnr, "markdown")
 
-    vim.keymap.set("n", "q", function()
-        window.close()
-    end, { buffer = bufnr, noremap = true, silent = true })
-
-    vim.keymap.set("n", "R", M.reset, { buffer = bufnr, noremap = true, silent = true })
-
-    -- Tab is the same keycode as C-i, so mapping it would eat the jumplist
-    if #enabled_types() > 1 then
-        vim.keymap.set(
-            "n",
-            "<S-Tab>",
-            M.next_type,
-            { buffer = bufnr, noremap = true, silent = true }
-        )
-    end
+    window.bind(bufnr, note_keys())
 
     return bufnr
 end

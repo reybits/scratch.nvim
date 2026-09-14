@@ -172,6 +172,7 @@ opts = {
 | `q`       | Close the scratch window      |
 | `R`       | Reset (clear) the current note|
 | `S-Tab`   | Switch to next note type      |
+| `?`       | Show every key of this buffer |
 
 ### Keymaps (inside the issue list)
 
@@ -185,7 +186,24 @@ opts = {
 | `T`       | Cycle type: bug, feature, refactor, task|
 | `P`       | Cycle priority: low, normal, high, critical|
 | `S`       | Toggle status: open, done     |
+| `t` / `p` | Narrow to the type / priority of the issue under the cursor|
+| `#`       | Narrow to each tag of the issue under the cursor in turn|
+| `s`       | Show open, then closed, then both|
 | `>` / `<` | Next / previous sort order    |
+| `?`       | Show every key of this buffer |
+
+The footer names only what it has room for, starting with `?` — it is cut to
+the width of the window, so the key that leads to the rest is the one that
+must survive the cut.
+
+`?` draws the full list over the window **without taking the focus**: taking
+it would leave the window behind, and with `close_on_leave` that is the window
+closing itself. The next key you press takes the list away and then does what
+it always does, so `?` then `#` narrows by tag in two keystrokes. Pressing `?`
+again simply closes it.
+
+Each buffer declares its keys once, and the footer, the help and the keymaps
+are that one declaration read three ways.
 
 `Tab` is deliberately left alone: it is the same keycode as `C-i`, and mapping
 it would break jumping forward through the jumplist.
@@ -266,6 +284,33 @@ The list is not ordered by them: a tag names a group, and an issue can be in
 several at once, so ordering by "the first one alphabetically" would say less
 than it seems. Ordering by description follows the description, not the tags
 standing in front of it.
+
+### Narrowing the list
+
+Upper case changes a field of an issue, lower case narrows the list by it:
+`S` closes an issue, `s` asks to see closed ones. `t`, `p` and `#` take what
+the issue under the cursor carries — its type, its priority, each of its tags
+in turn — and press again to widen back. With no issue under the cursor — an
+empty list, the header row — the same keys widen instead, so a filter that
+leaves nothing on screen, or one carried into a scope where nothing matches,
+can always be taken off. Tags answer to `#` rather than to a letter: `g` is the
+door to `gg`, `gj` and the rest, and the list needs its way back to the first
+row more than it needs a mnemonic. The value you want is nearly always
+in front of you, and a list narrowed to something absent would show nothing.
+
+Filters add up: tag `gui` together with type `bug` asks for the bugs of that
+subsystem. Which ones are in effect is read off the list itself, the way the
+sort order marks its column:
+
+```text
+    Type     Priority   <Created>   Description          nothing narrowed
+  x (BUG)    Priority   <Created>   [gui] Description    closed bugs tagged gui
+  * Type     Priority   <Created>   Description          open and closed alike
+```
+
+The first column carries the status: blank for open, `x` for closed, `*` for
+both. Closed issues are otherwise unreachable — the default view drops them,
+and nothing else brings them back.
 
 Only these fields and the first `#` heading are read; everything else in the
 file is left alone. Missing fields fall back to `task`, `normal` and `open`,
