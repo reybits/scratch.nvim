@@ -172,6 +172,7 @@ opts = {
 | `q`       | Close the scratch window      |
 | `R`       | Reset (clear) the current note|
 | `S-Tab`   | Switch to next note type      |
+| `?`       | Show every key of this buffer |
 
 ### Keymaps (inside the issue list)
 
@@ -189,6 +190,14 @@ opts = {
 | `#`       | Narrow to each tag of the issue under the cursor in turn|
 | `s`       | Show open, then closed, then both|
 | `>` / `<` | Next / previous sort order    |
+| `?`       | Show every key of this buffer |
+
+The footer names only what it has room for, starting with `?` — it is cut to
+the width of the window, so the key that leads to the rest is the one that
+must survive the cut. `?` opens the full list over the window and closes on
+`q`, `Esc`, `?`, `CR`, or as soon as the focus goes elsewhere. Each buffer
+declares its keys once, and the footer, the help and the keymaps are that one
+declaration read three ways.
 
 `Tab` is deliberately left alone: it is the same keycode as `C-i`, and mapping
 it would break jumping forward through the jumplist.

@@ -830,6 +830,100 @@ local function toggle_scope()
     window.swap_to(M.buffer())
 end
 
+--- What the list answers to. One table, so the keymaps, the footer and the
+--- help are the same three columns read three ways and cannot drift apart -
+--- which is how the footer once came to promise something that was no longer
+--- true. `brief` marks what the footer has room for.
+---@param scope string: the scope of the buffer being set up
+---@return scratch.Key[]
+local function keymaps(scope)
+    return {
+        { key = "q", desc = "close the window", brief = "close", run = window.close },
+        {
+            key = "<CR>",
+            desc = "open the issue under the cursor",
+            brief = "open",
+            run = open_entry,
+        },
+        {
+            key = "A",
+            desc = "new issue, opened on its heading",
+            brief = "new",
+            run = function()
+                M.new(scope)
+            end,
+        },
+        { key = "D", desc = "delete the issue, after confirming", run = delete_entry },
+        -- Tab is the same keycode as C-i: mapping it would eat the jump forward
+        { key = "<S-Tab>", desc = "switch between local and global", run = toggle_scope },
+
+        -- Upper case changes the field of an issue, lower case narrows the
+        -- list by it: S closes an issue, s asks to see closed ones.
+        {
+            key = "T",
+            desc = "cycle the type of the issue",
+            run = function()
+                cycle_field("type")
+            end,
+        },
+        {
+            key = "P",
+            desc = "cycle its priority",
+            run = function()
+                cycle_field("priority")
+            end,
+        },
+        {
+            key = "S",
+            desc = "open it or close it",
+            run = function()
+                cycle_field("status")
+            end,
+        },
+
+        {
+            key = "t",
+            desc = "narrow to that type",
+            run = function()
+                filter_by("type")
+            end,
+        },
+        {
+            key = "p",
+            desc = "narrow to that priority",
+            run = function()
+                filter_by("priority")
+            end,
+        },
+        { key = "s", desc = "show open, closed, then both", run = cycle_status_filter },
+        -- `#` rather than `g`: g is the door to gg, gj and the rest, and
+        -- taking it would cost the list its way back to the first row
+        { key = "#", desc = "narrow to each of its tags in turn", run = filter_by_tag },
+
+        {
+            key = ">",
+            desc = "next sort order",
+            run = function()
+                cycle_sort(1)
+            end,
+        },
+        {
+            key = "<",
+            desc = "previous sort order",
+            run = function()
+                cycle_sort(-1)
+            end,
+        },
+    }
+end
+
+--- The keys of the list, without the handlers: what the window puts in the
+--- footer and in the help
+---@return scratch.Key[]
+function M.keys()
+    return keymaps(state.scope)
+end
+
 --- The buffer of the list to show, created on first use, always ready to go
 ---@return number bufnr
 function M.buffer()
@@ -852,54 +946,7 @@ function M.buffer()
         vim.bo[bufnr].bufhidden = "hide"
         vim.bo[bufnr].modifiable = false
 
-        vim.keymap.set("n", "<CR>", open_entry, { buffer = bufnr, noremap = true, silent = true })
-
-        vim.keymap.set("n", "A", function()
-            M.new(scope)
-        end, { buffer = bufnr, noremap = true, silent = true })
-
-        vim.keymap.set("n", "D", delete_entry, { buffer = bufnr, noremap = true, silent = true })
-
-        vim.keymap.set("n", "q", window.close, { buffer = bufnr, noremap = true, silent = true })
-
-        -- Tab is the same keycode as C-i: mapping it would eat the jump forward
-        vim.keymap.set(
-            "n",
-            "<S-Tab>",
-            toggle_scope,
-            { buffer = bufnr, noremap = true, silent = true }
-        )
-
-        -- Upper case changes the field of an issue, lower case filters the
-        -- list by it: S closes an issue, s asks to see closed ones.
-        for key, field in pairs({ T = "type", P = "priority", S = "status" }) do
-            vim.keymap.set("n", key, function()
-                cycle_field(field)
-            end, { buffer = bufnr, noremap = true, silent = true })
-        end
-
-        for key, field in pairs({ t = "type", p = "priority" }) do
-            vim.keymap.set("n", key, function()
-                filter_by(field)
-            end, { buffer = bufnr, noremap = true, silent = true })
-        end
-
-        vim.keymap.set(
-            "n",
-            "s",
-            cycle_status_filter,
-            { buffer = bufnr, noremap = true, silent = true }
-        )
-
-        -- `#` rather than `g`: g is the door to gg, gj and the rest, and
-        -- taking it would cost the list its way back to the first row
-        vim.keymap.set("n", "#", filter_by_tag, { buffer = bufnr, noremap = true, silent = true })
-
-        for key, offset in pairs({ [">"] = 1, ["<"] = -1 }) do
-            vim.keymap.set("n", key, function()
-                cycle_sort(offset)
-            end, { buffer = bufnr, noremap = true, silent = true })
-        end
+        window.bind(bufnr, keymaps(scope))
 
         -- Coming back from an issue must show what was just edited. The list
         -- entered is also the one to open with next time, the same way the
