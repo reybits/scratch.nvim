@@ -114,27 +114,61 @@ local function hl_date()
     return "ScratchIssueDate"
 end
 
+--- A narrowed column says so in place of its own name
+---@param value string
+---@return string
+local function narrowed_header(value)
+    return "(" .. value:upper() .. ")"
+end
+
 ---@class scratch.Column
 ---@field header string
 ---@field width number: 0 means "take whatever is left"
 ---@field format fun(entry: scratch.Issue, sort: string): string
 ---@field hl (fun(entry: scratch.Issue): string|nil)|nil
 ---@field sorts table<string, string>|nil
+---@field filter string|nil: view field this column stands for
+---@field narrowed (fun(value: string, header: string): string)|nil
 
 --- Columns are data, so changing what a cell looks like stays a one-liner.
 --- `sorts` maps the orders a column stands for onto the name it takes while
 --- that order is in effect. The active header is wrapped in angle brackets,
 --- which name the keys that move the order; widths leave room for them.
+---
+--- `filter` names the view field the column shows, and `narrowed` says what
+--- its header becomes while that field asks for something - so the filters in
+--- effect are read off the list itself rather than off the window title.
 ---@type scratch.Column[]
 local columns = {
-    { header = " ", width = 2, format = cell_status },
-    { header = "Type", width = 9, format = cell_type, sorts = { type = "Type" } },
+    {
+        header = " ",
+        width = 2,
+        format = cell_status,
+        filter = "status",
+        -- the mark a closed issue carries, and `*` when both are shown
+        narrowed = function(value)
+            if value == "done" then
+                return "x"
+            end
+            return value == "any" and "*" or " "
+        end,
+    },
+    {
+        header = "Type",
+        width = 9,
+        format = cell_type,
+        sorts = { type = "Type" },
+        filter = "type",
+        narrowed = narrowed_header,
+    },
     {
         header = "Priority",
         width = 11,
         format = cell_priority,
         hl = hl_priority,
         sorts = { priority = "Priority" },
+        filter = "priority",
+        narrowed = narrowed_header,
     },
     {
         header = "Created",
@@ -143,7 +177,17 @@ local columns = {
         hl = hl_date,
         sorts = { created = "Created", updated = "Updated" },
     },
-    { header = "Description", width = 0, format = cell_title, sorts = { title = "Description" } },
+    {
+        header = "Description",
+        width = 0,
+        format = cell_title,
+        sorts = { title = "Description" },
+        filter = "tag",
+        -- where the tags stand in the rows below it
+        narrowed = function(value, header)
+            return "[" .. value .. "] " .. header
+        end,
+    },
 }
 
 --- Values a field cycles through, in order
@@ -218,21 +262,43 @@ local function sorter(name)
     return sorters[1]
 end
 
-local filters = {
-    open = function(entry)
-        return entry.status == "open"
-    end,
-}
-
 --- How the store is presented. Sorting and filtering live here and never
 --- touch the files.
+---
+--- Each field narrows on its own and they add up: tag "gui" with type "bug"
+--- asks for the bugs of that subsystem. nil means that axis asks nothing.
+--- `status` always holds one of open, done or any, because all three are
+--- worth showing in the header; the rest are nil until they are asked for.
 ---@class scratch.View
 ---@field sort string: name of a sorter
----@field filter string|nil
+---@field status string: open|done|any
+---@field type string|nil
+---@field priority string|nil
+---@field tag string|nil
 local view = {
     sort = "created",
-    filter = "open",
+    status = "open",
 }
+
+--- Whether an issue survives the view's filters
+---@param entry scratch.Issue
+---@param opts scratch.View
+---@return boolean
+local function kept(entry, opts)
+    if opts.status and opts.status ~= "any" and entry.status ~= opts.status then
+        return false
+    end
+    if opts.type and entry.type ~= opts.type then
+        return false
+    end
+    if opts.priority and entry.priority ~= opts.priority then
+        return false
+    end
+    if opts.tag and not vim.tbl_contains(entry.tags or {}, opts.tag) then
+        return false
+    end
+    return true
+end
 
 local state = {
     --- Which list to open with. A memory of the last one seen, the way init
@@ -400,19 +466,28 @@ end
 ---@param width number
 ---@return string[] lines, table<number, scratch.Issue> line_map, table[] marks
 function M.render(entries, opts, width)
-    local keep = filters[opts.filter]
     local shown = {}
     for _, entry in ipairs(entries) do
-        if keep == nil or keep(entry) then
+        if kept(entry, opts) then
             table.insert(shown, entry)
         end
     end
     table.sort(shown, sorter(opts.sort).compare)
 
+    local narrowed = false
     local headers = {}
     for i, column in ipairs(columns) do
+        local asked = column.filter and opts[column.filter]
         local active = column.sorts and column.sorts[opts.sort]
-        headers[i] = active and ("<" .. active .. ">") or column.header
+
+        headers[i] = column.header
+        if active then
+            headers[i] = "<" .. active .. ">"
+        end
+        if asked and column.narrowed then
+            headers[i] = column.narrowed(asked, headers[i])
+            narrowed = narrowed or column.filter ~= "status"
+        end
     end
 
     -- one value on purpose: format_row also returns spans, and a table
@@ -430,11 +505,16 @@ function M.render(entries, opts, width)
     end
 
     if #shown == 0 then
-        -- "No open issues" while a filter is on, plain "No issues" without
-        -- one: a view with no filter shows everything, and there is nothing
-        -- to name in that case
-        local what = opts.filter and (opts.filter .. " issues") or "issues"
-        table.insert(lines, indent .. "No " .. what)
+        -- The status is worth naming - "no open issues" is a different state
+        -- of affairs from "none at all". What else was asked for stands in
+        -- the header right above, so the notice does not repeat it.
+        local notice = "No issues"
+        if narrowed then
+            notice = "No matching issues"
+        elseif opts.status and opts.status ~= "any" then
+            notice = "No " .. opts.status .. " issues"
+        end
+        table.insert(lines, indent .. notice)
     end
 
     return lines, line_map, marks
@@ -682,6 +762,50 @@ local function cycle_field(field)
     repaint_row(bufnr, row, entry)
 end
 
+--- Narrow the list to the value the issue under the cursor carries, or widen
+--- it again when that is what it already shows. Asking of the row under the
+--- cursor rather than of a menu: the value you want is almost always in front
+--- of you, and a list narrowed to something absent would show nothing.
+---
+--- With no row to ask - an empty list, the header - the key widens instead.
+--- Otherwise a filter that leaves nothing on screen, or one carried into a
+--- scope where nothing matches, could not be taken off again.
+---@param field string: type or priority
+local function filter_by(field)
+    local entry = entry_under_cursor()
+    local value = entry and entry[field]
+
+    view[field] = (value ~= nil and view[field] ~= value) and value or nil
+    M.refresh(vim.api.nvim_get_current_buf())
+end
+
+--- Walk the tags of the issue under the cursor, then back to no filter, so
+--- an issue in several groups reaches each of them from the same key. An
+--- issue without tags, or no issue at all, widens - see filter_by.
+local function filter_by_tag()
+    local entry = entry_under_cursor()
+    local tags = entry and entry.tags or {}
+
+    local at = 0
+    for i, tag in ipairs(tags) do
+        if view.tag == tag then
+            at = i
+            break
+        end
+    end
+
+    view.tag = tags[at + 1]
+    M.refresh(vim.api.nvim_get_current_buf())
+end
+
+--- open, then done, then both. Closed issues are otherwise unreachable: the
+--- default view drops them, and nothing else brings them back.
+local function cycle_status_filter()
+    local order = { open = "done", done = "any", any = "open" }
+    view.status = order[view.status] or "open"
+    M.refresh(vim.api.nvim_get_current_buf())
+end
+
 --- Move to the next or previous sort order. The repaint carries the cursor
 --- through the reshuffling on its own.
 ---@param offset number: 1 for next, -1 for previous
@@ -746,11 +870,30 @@ function M.buffer()
             { buffer = bufnr, noremap = true, silent = true }
         )
 
+        -- Upper case changes the field of an issue, lower case filters the
+        -- list by it: S closes an issue, s asks to see closed ones.
         for key, field in pairs({ T = "type", P = "priority", S = "status" }) do
             vim.keymap.set("n", key, function()
                 cycle_field(field)
             end, { buffer = bufnr, noremap = true, silent = true })
         end
+
+        for key, field in pairs({ t = "type", p = "priority" }) do
+            vim.keymap.set("n", key, function()
+                filter_by(field)
+            end, { buffer = bufnr, noremap = true, silent = true })
+        end
+
+        vim.keymap.set(
+            "n",
+            "s",
+            cycle_status_filter,
+            { buffer = bufnr, noremap = true, silent = true }
+        )
+
+        -- `#` rather than `g`: g is the door to gg, gj and the rest, and
+        -- taking it would cost the list its way back to the first row
+        vim.keymap.set("n", "#", filter_by_tag, { buffer = bufnr, noremap = true, silent = true })
 
         for key, offset in pairs({ [">"] = 1, ["<"] = -1 }) do
             vim.keymap.set("n", key, function()

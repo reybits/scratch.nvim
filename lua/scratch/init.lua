@@ -173,6 +173,7 @@ local function describe(bufnr)
                 "'D' delete",
                 "'S-Tab' scope",
                 "'T'ype/'P'riority/'S'tatus",
+                "'t'/'p'/'s'/'#' filter",
                 "'<'/'>' sort",
             }, "  |  "),
         }
